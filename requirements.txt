@@ -1,0 +1,6 @@
+gurobipy
+matplotlib
+numpy
+aiohttp
+tiktoken
+litellm
