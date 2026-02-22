@@ -1,6 +1,6 @@
 <div align="center">
 
-# Co-Layout: LLM-driven Co-optimization for Interior Layout
+# Co-Layout: LLM-driven Co-optimization<br>for Interior Layout
 
 [Chucheng Xiang](https://xccelephant.github.io/)<sup>1</sup>, Ruchao Bao<sup>1</sup>, Biyin Feng<sup>2</sup>, Wenzheng Wu<sup>1</sup>, [Zhongyuan Liu](https://digiartomnis.github.io/index.html)<sup>3</sup>, Yirui Guan<sup>3</sup>, [Ligang Liu](http://staff.ustc.edu.cn/~lgliu)<sup>1\*</sup>
 
