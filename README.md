@@ -148,10 +148,16 @@ python run_e2e.py --input "Design an apartment about 100 square meters." --model
 If you find our work useful in your research, please consider citing:
 
 ```bibtex
-@inproceedings{xiang2026co,
+@article{Xiang2026Co,
   title={Co-Layout: LLM-driven Co-optimization for Interior Layout},
   author={Xiang, Chucheng and Bao, Ruchao and Feng, Biyin and Wu, Wenzheng and Liu, Zhongyuan and Guan, Yirui and Liu, Ligang},
-  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
-  year={2026}
+  journal={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={40},
+  number={17},
+  pages={14371-14379},
+  year={2026},
+  month={Mar.},
+  doi={10.1609/aaai.v40i17.38452},
+  url={https://ojs.aaai.org/index.php/AAAI/article/view/38452}
 }
 ```
