@@ -23,11 +23,15 @@ class FloorplanModel:
     def __init__(
         self,
         model_name: str,
+        session_id: str,
         building_params: dict,
         rooms: dict,
         room_constraints: dict,
     ):
         self.model_name = model_name
+        self.session_id = session_id
+        self.output_dir = get_optimization_dir(session_id)
+        self.visualization_dir = get_visualization_dir(session_id)
         self.width = building_params["width"]
         self.length = building_params["length"]
         self.entrance = building_params["entrance_location"]
@@ -240,7 +244,7 @@ class FloorplanModel:
                         self.outdoor_space_array,
                         None,
                         self.room_name_list,
-                        str(PATH_OF_FIGURES / f"{self.model_name}.png"),
+                        str(self.visualization_dir / f"{self.model_name}.png"),
                     )
                     data["last_update"] = current_time
 
@@ -249,6 +253,7 @@ class FloorplanModel:
             self.model_name,
             self.objective_function,
             stage_num,
+            self.output_dir,
             visualization_callback,
         )
 
@@ -257,7 +262,7 @@ class FloorplanModel:
             self.model.computeIIS()
             self.model.write(
                 os.path.join(
-                    PATH_OF_OPTIMIZATION_MODELS,
+                    self.output_dir,
                     f"{self.model_name}.ilp",
                 )
             )
@@ -292,14 +297,14 @@ class FloorplanModel:
                     self.outdoor_space_array,
                     self.wall_array,
                     self.room_name_list,
-                    str(PATH_OF_FIGURES / f"{self.model_name}.png"),
+                    str(self.visualization_dir / f"{self.model_name}.png"),
                 )
                 visualize_floorplan_cadstyle(
                     self.x_array,
                     self.passage_array,
                     self.outdoor_space_array,
                     self.wall_array,
-                    str(PATH_OF_FIGURES / f"{self.model_name}.svg"),
+                    str(self.visualization_dir / f"{self.model_name}.svg"),
                 )
             else:
                 print("No feasible solution found")
@@ -307,7 +312,7 @@ class FloorplanModel:
             print(f"Model solving failed, status code: {self.model.status}")
 
     def set_log(self):
-        configure_model_log(self.model, self.model_name)
+        configure_model_log(self.model, self.model_name, self.output_dir)
 
     def set_constraints(self):
         self.add_passage_basic_constraints()

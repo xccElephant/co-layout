@@ -1,6 +1,8 @@
-gurobipy
-matplotlib
-numpy
-aiohttp
-tiktoken
-litellm
+gurobipy==13.0.1
+matplotlib==3.10.8
+numpy==2.4.2
+aiohttp==3.13.3
+tiktoken==0.12.0
+litellm==1.81.8
+sentence-transformers==5.6.0
+huggingface_hub==1.24.0

@@ -176,13 +176,13 @@ async def chat_with_model(
     # build request headers and payload
     headers = {"Authorization": f"Bearer {config['api_key']}"}
 
-    # newer OpenAI models (gpt-5) require max_completion_tokens instead of max_tokens
+    # newer OpenAI models (gpt-5) require max_completion_tokens and temperature=1.0
     token_key = "max_completion_tokens" if model_name.startswith("gpt-5") else "max_tokens"
 
     payload = {
         "model": model_name,
         "messages": messages,
-        "temperature": temperature,
+        "temperature": 1.0 if model_name.startswith("gpt-5") else temperature,
         "stream": stream,
         token_key: 8192,
     }

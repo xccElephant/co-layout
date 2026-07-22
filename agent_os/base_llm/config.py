@@ -16,14 +16,11 @@ with open(os.path.join(current_dir, "../../key/llm_key.json"), "r") as f:
 def get_provider_config(provider_name):
     if provider_name in api_key_json:
         provider_data = api_key_json[provider_name]
+        api_base = provider_data.get("api_base", "").rstrip("/")
         return {
             "api_key": provider_data.get("api_key", ""),
-            "api_base": provider_data.get("api_base", ""),
-            "path": (
-                "/v1/chat/completions"
-                if provider_name != "zhipu"
-                else "/v4/chat/completions"
-            ),
+            "api_base": api_base,
+            "path": provider_data.get("path", "/v1/chat/completions"),
         }
     return None
 

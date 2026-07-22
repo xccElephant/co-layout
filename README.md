@@ -19,7 +19,7 @@
 ---
 
 ## 📌 TODO
-- [ ] **Blender 3D Visualization**: The 3D visualization module using Blender is currently not included in this repository and will be released soon.
+- [x] **Blender 3D Visualization**: A streamlined Blender 3D visualization is now included (see [Usage step 4](#4-run-3d-visualization)), using real furniture assets from the [Imaginarium](https://huggingface.co/datasets/HiHiAllen/Imaginarium-Dataset) asset library. It procedurally builds walls, doors, and windows in addition to furniture and a floor; asset retrieval is a semantic/size heuristic rather than a ground-truth match.
 - [ ] **Optimization Acceleration**: Performance improvements and acceleration techniques for the grid-based integer programming.
 
 ## 📂 Project Structure
@@ -28,10 +28,12 @@
 co-layout/
 ├── agent_os/              # Agent framework (workflow engine & LLM API)
 ├── agents/                # Agent definitions
+├── asset_library/         # Imaginarium asset download + retrieval (for 3D visualization)
 ├── test/                  # test scripts
 ├── optimization/          # Optimization models
-├── utils/                 # Utility functions
-├── output/                # Output data and figures
+├── utils/                 # Utility functions, incl. blender_visualization.py (3D visualization pipeline)
+├── output/                # Output data, grouped per run under output/sessions/<session_id>/
+├── datasets/              # (User-downloaded) Imaginarium dataset lives here, or symlink via DATASETS_ROOT
 ├── key/                   # API key config
 ├── run_agents.py          # Run LLM agents pipeline
 ├── run_optimization.py    # Run optimization pipeline
@@ -50,9 +52,14 @@ conda activate co-layout
 
 ### Python Dependencies
 
+Top-level dependency versions are pinned in [`requirements.txt`](requirements.txt) for reproducibility (transitive dependencies are left for `pip`/`uv` to resolve). We recommend installing with [uv](https://docs.astral.sh/uv/) — a drop-in, much faster replacement for `pip` that still installs into your active conda environment (no separate venv, no change to the workflow above):
+
 ```bash
-pip install -r requirements.txt
+pip install uv                      # install uv itself
+uv pip install -r requirements.txt
 ```
+
+Plain `pip install -r requirements.txt` works the same way if you'd rather not use `uv`.
 
 ### Gurobi
 
@@ -142,6 +149,44 @@ Example:
 ```bash
 python run_e2e.py --input "Design an apartment about 100 square meters." --model gemini-3-flash-preview
 ```
+
+### 4. Run 3D Visualization
+
+We provide a streamlined Blender 3D visualization built on real furniture assets from [Imaginarium](https://huggingface.co/datasets/HiHiAllen/Imaginarium-Dataset). It converts the 2D grid optimization result into a metric 3D layout (furniture size/position/orientation, a retrieved asset per item via semantic + size matching, and walls/doors/windows derived from the grid's wall/door/window arrays), then builds and renders the scene in Blender: a procedural floor and walls (with a door leaf in door openings, and a glass pane + sill/lintel in window openings), the matched FBX assets imported and rotated to face the direction implied by co-layout's own orientation variables, and auto-framed lighting/camera.
+
+Known limitations: asset retrieval is a best-effort semantic/size heuristic (co-layout has no ground-truth asset-facing annotation to match against); door leaves are modeled closed (no swing arc / hinge animation); windows have no glazing bars.
+
+Everything lives in a single script, [utils/blender_visualization.py](utils/blender_visualization.py), which plays two roles depending on how it's invoked: as plain Python it exports the metric layout JSON (needs `sentence-transformers` for asset retrieval); re-invoked by Blender (`blender -b -P utils/blender_visualization.py -- ...`) it builds and renders the scene (needs `bpy`, i.e. must run inside Blender). `--auto-render` chains both steps for you.
+
+One-time setup:
+
+```bash
+python -m asset_library.download_imaginarium    # downloads the official Imaginarium dataset from HF (~tens of GB)
+python -m asset_library.asset_retriever         # builds the local semantic asset index
+```
+
+You also need [Blender](https://www.blender.org/download/) installed (used as an external renderer, not a pip dependency).
+
+Then, for a session that has already been optimized (see step 2):
+
+```bash
+python utils/blender_visualization.py --session <session_id> --auto-render
+```
+
+Optional arguments:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--result` | `output/sessions/<session>/optimization/result.json` | Path to a specific optimization result JSON |
+| `--render-image` | `output/sessions/<session>/visualization/render.png` | Rendered image output path |
+| `--render-resolution` | `1920 1920` | Render resolution |
+| `--floor-texture` | `assets/floor_texture.jpg` | Path to a floor texture image |
+| `--render-engine` | `BLENDER_EEVEE_NEXT` | `BLENDER_EEVEE_NEXT` / `EEVEE` / `CYCLES` |
+| `--camera-azimuth` / `--camera-elevation` | `235` / `55` (degrees) | Camera framing; elevation needs to stay fairly high so the camera can see over the walls into the rooms |
+| `--show-axes` | off | Draw an RGB world-axis indicator (debugging aid) |
+| `--auto-render` | off | Invoke Blender automatically instead of just printing the command |
+
+Without `--auto-render`, the script only exports the 3D layout JSON and prints the `blender -b -P ...` command for you to run yourself (Blender rendering runs in its own process; see [asset_library/paths.py](asset_library/paths.py) for dataset path configuration via `DATASETS_ROOT`).
 
 ## 📖 Citation
 

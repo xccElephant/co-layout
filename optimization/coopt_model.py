@@ -22,6 +22,7 @@ class CooptModel:
     def __init__(
         self,
         model_name: str,
+        session_id: str,
         building_params: dict,
         rooms: dict,
         room_constraints: dict,
@@ -29,6 +30,9 @@ class CooptModel:
         furniture_constraints: dict
     ):
         self.model_name = model_name
+        self.session_id = session_id
+        self.output_dir = get_optimization_dir(session_id)
+        self.visualization_dir = get_visualization_dir(session_id)
         self.width = building_params["width"]
         self.length = building_params["length"]
         self.rooms = rooms
@@ -265,7 +269,7 @@ class CooptModel:
                         None,
                         self.furnitures,
                         self.furniture_constraints,
-                        str(PATH_OF_FIGURES / f"{self.model_name}.png"),
+                        str(self.visualization_dir / f"{self.model_name}.png"),
                     )
                     data["last_update"] = current_time
 
@@ -286,7 +290,7 @@ class CooptModel:
             self.window_array,
             self.furnitures,
             self.furniture_constraints,
-            str(PATH_OF_FIGURES / f"{self.model_name}.png"),
+            str(self.visualization_dir / f"{self.model_name}.png"),
         )
         visualize_floorplan_with_furniture_cadstyle(
             self.x_array,
@@ -302,7 +306,8 @@ class CooptModel:
             self.window_array,
             self.furnitures,
             self.furniture_constraints,
-            str(PATH_OF_FIGURES / f"{self.model_name}.svg"),
+            str(self.visualization_dir / f"{self.model_name}.svg"),
+            results_path=str(self.output_dir / "result.json"),
         )
 
     def _finalize_solution(self):
@@ -334,7 +339,7 @@ class CooptModel:
             self.model.computeIIS()
             self.model.write(
                 os.path.join(
-                    PATH_OF_OPTIMIZATION_MODELS,
+                    self.output_dir,
                     f"{self.model_name}.ilp",
                 )
             )
@@ -543,6 +548,7 @@ class CooptModel:
             self.model_name,
             self.objective_function,
             stage_num,
+            self.output_dir,
             self._build_visualization_callback(),
         )
         self._export_iis_if_infeasible()
@@ -565,6 +571,7 @@ class CooptModel:
             self.model_name,
             self.objective_function,
             1,
+            self.output_dir,
             self._build_visualization_callback(),
         )
         self._export_iis_if_infeasible()
@@ -593,7 +600,7 @@ class CooptModel:
             ].X
 
     def set_log(self):
-        configure_model_log(self.model, self.model_name)
+        configure_model_log(self.model, self.model_name, self.output_dir)
 
     def set_constraints(self):
         self.add_room_adjacent_constraints()

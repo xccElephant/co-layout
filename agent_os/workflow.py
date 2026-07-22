@@ -13,7 +13,7 @@ class AgentWorkflow:
     def __init__(
         self,
         session_id="test",
-        memory_path=str(PATH_OF_MEMORY),
+        memory_path=str(PATH_OF_SESSIONS),
     ):
         self.agents = []
         self.memory = {}
@@ -231,8 +231,8 @@ if __name__ == "__main__":
     client_data_str = json.dumps(initial_input, indent=4, ensure_ascii=False)
 
     session_id = generate_unique_filename()
-    # create the memory/session_id directory
-    session_dir = PATH_OF_MEMORY / session_id
+    # create the sessions/session_id directory
+    session_dir = PATH_OF_SESSIONS / session_id
     os.makedirs(session_dir, exist_ok=True)
     file_path_user_info_stream = f"{session_dir}/user_info.md"
 

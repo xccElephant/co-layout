@@ -46,7 +46,7 @@ async def main():
     }
 
     session_id = generate_unique_filename()
-    session_dir = os.path.join(PATH_OF_MEMORY, session_id)
+    session_dir = os.path.join(PATH_OF_SESSIONS, session_id)
     os.makedirs(session_dir, exist_ok=True)
     file_path_user_info_stream = os.path.join(session_dir, "user_info.md")
 

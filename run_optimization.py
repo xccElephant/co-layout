@@ -80,7 +80,7 @@ def _project_entrance_to_boundary(params):
 
 
 def synthesis(session_id):
-    json_file = PATH_OF_MEMORY / session_id / "memory.json"
+    json_file = PATH_OF_SESSIONS / session_id / "memory.json"
         
     with open(json_file, "r", encoding="utf-8") as file:
         json_data = json.load(file)
@@ -106,7 +106,7 @@ def synthesis(session_id):
         room["area"] = round(room["area"] / C / C)
 
     coarse_model = FloorplanModel(
-        f"Coarse_{session_id}", building_params_coarse, rooms_coarse, room_constraints
+        "Coarse", session_id, building_params_coarse, rooms_coarse, room_constraints
     )
     coarse_model.optimize()
     coarse_x_array = coarse_model.get_solutions()
@@ -146,7 +146,8 @@ def synthesis(session_id):
     fine_x_array = np.kron(coarse_x_array, np.ones((N, N), dtype=int))
 
     fine_model = CooptModel(
-        f"Fine_{session_id}",
+        "Fine",
+        session_id,
         building_params_fine,
         rooms_fine,
         room_constraints,

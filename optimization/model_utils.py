@@ -2,13 +2,13 @@ import os
 
 from gurobipy import GRB, quicksum
 
-from constants import PATH_OF_OPTIMIZATION_LOGS, PATH_OF_OPTIMIZATION_MODELS
 from utils.find_boundary import find_boundary_coordinates
 
 
-def configure_model_log(model, model_name: str) -> None:
-    """Configure a clean log file for a Gurobi model."""
-    log_file_path = os.path.join(PATH_OF_OPTIMIZATION_LOGS, f"{model_name}.log")
+def configure_model_log(model, model_name: str, output_dir) -> None:
+    """Configure a clean log file for a Gurobi model, written into ``output_dir``
+    (typically the model's session-scoped optimization directory)."""
+    log_file_path = os.path.join(output_dir, f"{model_name}.log")
     if os.path.exists(log_file_path):
         try:
             os.remove(log_file_path)
@@ -26,10 +26,15 @@ def run_staged_optimization(
     model_name: str,
     objective_function,
     stage_num: int,
+    output_dir,
     callback=None,
 ) -> None:
-    """Run one-stage or two-stage optimization with shared settings."""
-    model.write(os.path.join(PATH_OF_OPTIMIZATION_MODELS, f"{model_name}.lp"))
+    """Run one-stage or two-stage optimization with shared settings.
+
+    ``output_dir`` is the model's session-scoped optimization directory,
+    where the exported .lp file is written.
+    """
+    model.write(os.path.join(output_dir, f"{model_name}.lp"))
 
     if stage_num == 1:
         model.setParam("MIPFocus", 2)

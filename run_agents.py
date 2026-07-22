@@ -43,7 +43,7 @@ initial_input = {
 }
 
 session_id = generate_unique_filename()
-session_dir = PATH_OF_MEMORY / session_id
+session_dir = PATH_OF_SESSIONS / session_id
 os.makedirs(session_dir, exist_ok=True)
 file_path_user_info_stream = f"{session_dir}/user_info.md"
 

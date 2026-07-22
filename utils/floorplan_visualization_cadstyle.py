@@ -1,4 +1,3 @@
-import datetime
 import itertools
 import json
 import os
@@ -113,6 +112,7 @@ def visualize_floorplan_with_furniture_cadstyle(
     furniture_info=None,
     furniture_constraints=None,
     save_path="floorplan_furniture_visualization.svg",
+    results_path=None,
 ):
     # Loading a saved solution
     num_rooms, width, length = x_array.shape
@@ -454,9 +454,8 @@ def visualize_floorplan_with_furniture_cadstyle(
         "window_array": windows,
         "furniture_info": furniture_info_,
     }
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    results_filename = f"{timestamp}.json"
-    results_path = os.path.join(PATH_OF_OPTIMIZATION_RESULTS, results_filename)
+    if results_path is None:
+        results_path = os.path.join(os.path.dirname(save_path) or ".", "result.json")
 
     with open(
         results_path,
