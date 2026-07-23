@@ -1,6 +1,6 @@
 # Known-issue Imaginarium asset IDs (name_en), one per line.
 # These FBX files have known geometry issues (origin not at bbox center,
-# or rotation not reset) and are skipped by asset_library/asset_retriever.py
+# or rotation not reset) and are skipped by utils/asset_retriever.py
 # when building the asset index. We do not redistribute repaired copies of
 # these assets; download the originals from the official HF source as usual.
 43_FruitBasket

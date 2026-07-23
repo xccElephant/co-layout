@@ -8,7 +8,7 @@ file plays two roles depending on how it is executed:
   1. Driver (plain Python): reads a session's memory.json and
      optimization/result.json (see output/sessions/<session_id>/), retrieves
      a matching Imaginarium asset for every furniture item (see
-     asset_library/asset_retriever.py), and writes a metric "layout JSON"
+     utils/asset_retriever.py), and writes a metric "layout JSON"
      (grid cells -> meters, wall/door/window openings, per-object asset +
      transform). It then either prints the Blender command to run, or (with
      --auto-render) invokes Blender itself as a subprocess -- re-running this
@@ -30,8 +30,8 @@ Usage:
     python utils/blender_visualization.py --session <session_id>
 
 Prerequisites (once):
-    python -m asset_library.download_imaginarium
-    python -m asset_library.asset_retriever
+    python -m utils.download_imaginarium
+    python -m utils.asset_retriever
 """
 
 import argparse
@@ -69,7 +69,7 @@ from constants import (  # noqa: E402
     get_session_dir,
     get_visualization_dir,
 )
-from asset_library.paths import ASSET_INDEX_DEFAULT_PATH  # noqa: E402
+from utils.paths import ASSET_INDEX_DEFAULT_PATH  # noqa: E402
 
 _FACING_LETTER = {EAST: "E", WEST: "W", SOUTH: "S", NORTH: "N"}
 
@@ -235,7 +235,7 @@ def export_layout(
     min_score: float = 0.2,
     output_path: Path = None,
 ) -> Path:
-    from asset_library.asset_retriever import DEFAULT_EMBEDDING_MODEL, AssetRetriever
+    from utils.asset_retriever import DEFAULT_EMBEDDING_MODEL, AssetRetriever
     from utils.pre_process import extract_data
 
     embedding_model = embedding_model or DEFAULT_EMBEDDING_MODEL
@@ -1365,7 +1365,7 @@ def _main_driver():
     parser.add_argument("--session", "-s", type=str, required=True, help="Session ID (same as run_optimization.py --session)")
     parser.add_argument("--result", type=str, default=None, help="Path to a specific result.json (default: output/sessions/<session>/optimization/result.json)")
     parser.add_argument("--output", type=str, default=None, help="Output layout JSON path (default: output/sessions/<session>/visualization/layout_3d.json)")
-    parser.add_argument("--asset-index", type=str, default=str(ASSET_INDEX_DEFAULT_PATH), help="Path to the built asset index (see asset_library/asset_retriever.py)")
+    parser.add_argument("--asset-index", type=str, default=str(ASSET_INDEX_DEFAULT_PATH), help="Path to the built asset index (see utils/asset_retriever.py)")
     parser.add_argument("--embedding-model", type=str, default=None, help="sentence-transformers model name; must match the one used to build the index")
     parser.add_argument("--size-tolerance", type=float, default=0.5, help="Relative size tolerance for asset retrieval scoring")
     parser.add_argument("--min-score", type=float, default=0.2, help="Minimum retrieval score before falling back to the best available match")
@@ -1433,11 +1433,11 @@ def _main_builder():
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else []
 
-    from asset_library.paths import IMAGINARIUM_ASSETS_DIR
+    from utils.paths import IMAGINARIUM_ASSETS_DIR
 
     parser = argparse.ArgumentParser(description="Build and render a co-layout 3D layout JSON inside Blender.")
     parser.add_argument("--layout", "-l", type=str, required=True, help="Path to the *_layout_3d.json produced by the driver step")
-    parser.add_argument("--assets-dir", type=str, default=str(IMAGINARIUM_ASSETS_DIR), help="Path to imaginarium_assets/ (default: asset_library/paths.py's IMAGINARIUM_ASSETS_DIR)")
+    parser.add_argument("--assets-dir", type=str, default=str(IMAGINARIUM_ASSETS_DIR), help="Path to imaginarium_assets/ (default: utils/paths.py's IMAGINARIUM_ASSETS_DIR)")
     parser.add_argument("--floor-texture", "-f", type=str, default=DEFAULT_FLOOR_TEXTURE, help=f"Floor texture image path (default: {DEFAULT_FLOOR_TEXTURE})")
     parser.add_argument("--texture-scale", "-s", type=float, default=0.5, help="Floor texture tiling scale")
     parser.add_argument("--show-axes", action="store_true", help="Draw an RGB world-axis indicator above the scene (debugging aid)")

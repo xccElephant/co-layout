@@ -11,11 +11,11 @@ with ``--embedding-model``).
 The official ``imaginarium_asset_info.csv`` (downloaded from HF) is missing
 ``short_desc``/``category``, and its ``bbx`` size column is wrong (wildly off
 scale, or axis-swapped) for ~9% of assets. We patch both issues via a small
-repo-bundled sidecar CSV (asset_library/imaginarium_assets.csv,
+repo-bundled sidecar CSV (utils/data/imaginarium_assets.csv,
 keyed by ``name_en``) carrying our own ``short_desc``/``category`` plus a
 corrected, mesh-derived ``size``; entries missing from the sidecar fall back
 to the CSV's own fields. A handful of known-issue FBX files (see
-asset_library/issue_asset_blacklist.txt) are skipped entirely.
+utils/data/issue_asset_blacklist.txt) are skipped entirely.
 """
 
 import csv
@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from asset_library.paths import (
+from utils.paths import (
     ASSET_INDEX_DEFAULT_PATH,
     IMAGINARIUM_ASSET_INFO_CSV,
     IMAGINARIUM_ASSETS_DIR,
@@ -334,7 +334,7 @@ def build_asset_index(
     if not asset_info_csv_path.exists():
         raise FileNotFoundError(
             f"Asset info CSV not found: {asset_info_csv_path}\n"
-            "Run `python -m asset_library.download_imaginarium` first."
+            "Run `python -m utils.download_imaginarium` first."
         )
 
     blacklist = load_issue_asset_blacklist(blacklist_path)
@@ -450,4 +450,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python -m asset_library.asset_retriever
+# python -m utils.asset_retriever

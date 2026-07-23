@@ -205,7 +205,7 @@ class AgentWorkflow:
 if __name__ == "__main__":
     import argparse
 
-    from utils.common import generate_unique_filename
+    from utils.unique_filename import generate_unique_filename
 
     parser = argparse.ArgumentParser(description="Run Agent Workflow")
     parser.add_argument("agent_name", type=str, help="Name of the agent to run")

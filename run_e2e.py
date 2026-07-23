@@ -13,7 +13,7 @@ from agent_os.workflow import AgentWorkflow
 from run_optimization import synthesis
 from constants import *
 
-from utils.common import generate_unique_filename
+from utils.unique_filename import generate_unique_filename
 
 async def main():
     parser = argparse.ArgumentParser(description="End-to-End Layout Generation and Optimization")
