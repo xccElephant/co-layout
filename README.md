@@ -153,6 +153,14 @@ python -m utils.download_imaginarium    # downloads the official Imaginarium dat
 python -m utils.asset_retriever         # builds the local semantic asset index
 ```
 
+Already have the Imaginarium dataset downloaded elsewhere? Point `ASSET_LIBRARY_ROOT` at it instead of downloading a second copy (see [utils/paths.py](utils/paths.py)):
+
+```bash
+export ASSET_LIBRARY_ROOT=/path/to/existing/Imaginarium   # expects imaginarium_assets/ directly under it
+```
+
+`python -m utils.download_imaginarium` will then see the dataset is already there and skip downloading; you still need to run `python -m utils.asset_retriever` to build the local index.
+
 You also need [Blender](https://www.blender.org/download/) installed (used as an external renderer, not a pip dependency).
 
 Then, for a session that has already been optimized (see step 2):
