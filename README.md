@@ -1,5 +1,15 @@
 <div align="center">
 
+# Co-Layout: LLM-driven Co-optimization<br>for Interior Layout
+
+[Chucheng Xiang](https://xccelephant.github.io/)<sup>1</sup>, Ruchao Bao<sup>1</sup>, Biyin Feng<sup>2</sup>, Wenzheng Wu<sup>1</sup>, [Zhongyuan Liu](https://digiartomnis.github.io/index.html)<sup>3</sup>, Yirui Guan<sup>3</sup>, [Ligang Liu](http://staff.ustc.edu.cn/~lgliu)<sup>1\*</sup>
+
+<sup>1</sup>University of Science and Technology of China &nbsp; <sup>2</sup>Tsinghua University &nbsp; <sup>3</sup>Tencent
+
+**AAAI 2026**
+
+[![arXiv](https://img.shields.io/badge/arXiv-2511.12474-b31b1b.svg)](https://arxiv.org/abs/2511.12474) [![Project Page](https://img.shields.io/badge/Project-Page-blue.svg)](https://xccelephant.github.io/paper/co-layout/)
+
 ![Gallery](assets/gallery.jpg)
 
 **TL;DR**: We present a novel framework for automated interior design that combines large language models (LLMs) with grid-based integer programming to jointly optimize room layout and furniture placement.
