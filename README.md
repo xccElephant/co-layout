@@ -20,7 +20,7 @@
 
 ## 📌 TODO
 
-- [X] **Blender 3D Visualization**: A streamlined Blender 3D visualization is now included (see [Usage step 4](#4-run-3d-visualization)), using real furniture assets from the [Imaginarium](https://huggingface.co/datasets/HiHiAllen/Imaginarium-Dataset) asset library. It procedurally builds walls, doors, and windows in addition to furniture and a floor; asset retrieval is a semantic/size heuristic rather than a ground-truth match.
+- [X] **Blender 3D Visualization**: A streamlined Blender 3D visualization is now included (see [Usage step 4](#4-run-3d-visualization)), using real furniture assets from the [Imaginarium](https://huggingface.co/datasets/HiHiAllen/Imaginarium-Dataset) asset library. It procedurally builds walls, doors, and windows in addition to furniture and a floor.
 - [ ] **Optimization Acceleration**: Performance improvements and acceleration techniques for the grid-based integer programming.
 
 ## 📂 Project Structure
@@ -32,7 +32,7 @@ co-layout/
 ├── asset_library/         # (User-downloaded) Imaginarium 3D assets live here by default, or point elsewhere via ASSET_LIBRARY_ROOT
 ├── test/                  # test scripts
 ├── optimization/          # Optimization models
-├── utils/                 # Utility functions: blender_visualization.py (3D visualization pipeline) + Imaginarium asset download/retrieval
+├── utils/                 # Utility functions
 ├── output/                # Output data, grouped per run under output/sessions/<session_id>/
 ├── key/                   # API key config
 ├── run_agents.py          # Run LLM agents pipeline
