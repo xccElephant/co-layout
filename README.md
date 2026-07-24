@@ -4,6 +4,8 @@
 
 **TL;DR**: We present a novel framework for automated interior design that combines large language models (LLMs) with grid-based integer programming to jointly optimize room layout and furniture placement.
 
+</div>
+
 ---
 
 ## 📌 TODO
