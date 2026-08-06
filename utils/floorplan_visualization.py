@@ -4,8 +4,12 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
 from constants import *
-import itertools
 import os
+
+from utils.furniture_layout_geometry import (
+    compute_furniture_draw_rects,
+    warn_on_furniture_overlaps,
+)
 
 
 def visualize_floorplan(
@@ -193,26 +197,6 @@ def visualize_floorplan_with_furniture(
                     room_matrix[i, j] = k
                     break
     
-    furniture_parallel_size = []
-    furniture_vertical_size = []
-    furniture_original_parallel_size = []
-    furniture_original_vertical_size = []
-    for k in range(num_rooms):
-        p_list = []
-        v_list = []
-        p_original_list = []
-        v_original_list = []
-        room_name = room_name_list[k]
-        for l in range(num_furnitures[k]):
-            p_list.append(furniture_info[room_name][l]["width"])
-            v_list.append(furniture_info[room_name][l]["length"])
-            p_original_list.append(furniture_info[room_name][l]["original_width"])
-            v_original_list.append(furniture_info[room_name][l]["original_length"])
-        furniture_parallel_size.append(p_list)
-        furniture_vertical_size.append(v_list)
-        furniture_original_parallel_size.append(p_original_list)
-        furniture_original_vertical_size.append(v_original_list)
-
     # Creating a visualization
     fig, ax = plt.subplots(figsize=(14, 10))  # Further increase the image size
     unique_rooms = np.unique(room_matrix)
@@ -304,138 +288,24 @@ def visualize_floorplan_with_furniture(
         legend_elements.append(obstacle_patch)
 
     # Visualize furniture
-    drawn_furniture_rects = []  # List to store rectangles of drawn furniture
-    for k in range(num_rooms):
-        furniture_rect_list = []
-        room_name = room_name_list[k]
-        for l in range(num_furnitures[k]):
-            if furniture_orientation_sigma_array[k][l] > 0.5:
-                # Parallel to j-axis
-                i_range = furniture_parallel_size[k][l]
-                j_range = furniture_vertical_size[k][l]
-                i_size = furniture_original_parallel_size[k][l]
-                j_size = furniture_original_vertical_size[k][l]
-            else:
-                # Parallel to i-axis
-                i_range = furniture_vertical_size[k][l]
-                j_range = furniture_parallel_size[k][l]
-                i_size = furniture_original_vertical_size[k][l]
-                j_size = furniture_original_parallel_size[k][l]
-
-            i_center = f_rect_min_i_array[k][l] + (i_range - 1) / 2
-            j_center = f_rect_min_j_array[k][l] + (j_range - 1) / 2
-
-            north_boundary = False
-            south_boundary = False
-            west_boundary = False
-            east_boundary = False
-            for i in range(width):
-                for j in range(length):
-                    if furniture_array[k][l, i, j] > 0.5:
-                        if i == 0 or x_array[k, i - 1, j] < 0.5: 
-                            north_boundary = True
-                        if i == width - 1 or x_array[k, i + 1, j] < 0.5:
-                            south_boundary = True
-                        if j == 0 or x_array[k, i, j - 1] < 0.5:
-                            west_boundary = True
-                        if j == length - 1 or x_array[k, i, j + 1] < 0.5:
-                            east_boundary = True
-
-            if furniture_info[room_name][l]["name"] in furniture_constraints[room_name]["boundary_items"]:
-                if furniture_orientation_sigma_array[k][l] < 0.5 and furniture_orientation_mu_array[k][l] < 0.5:
-                    if west_boundary:
-                        j_center -= (j_range - j_size) / 2
-                        west_boundary = False
-                    elif north_boundary:
-                        i_center -= (i_range - i_size) / 2
-                        north_boundary = False
-                    elif south_boundary:
-                        i_center += (i_range - i_size) / 2
-                        south_boundary = False
-                elif furniture_orientation_sigma_array[k][l] < 0.5 and furniture_orientation_mu_array[k][l] > 0.5:
-                    if east_boundary:
-                        j_center += (j_range - j_size) / 2
-                        east_boundary = False
-                    elif north_boundary:
-                        i_center -= (i_range - i_size) / 2
-                        north_boundary = False
-                    elif south_boundary:
-                        i_center += (i_range - i_size) / 2
-                        south_boundary = False
-                elif furniture_orientation_sigma_array[k][l] > 0.5 and furniture_orientation_mu_array[k][l] < 0.5:
-                    if north_boundary:
-                        i_center -= (i_range - i_size) / 2
-                        north_boundary = False
-                    elif west_boundary:
-                        j_center -= (j_range - j_size) / 2
-                        west_boundary = False
-                    elif east_boundary:
-                        j_center += (j_range - j_size) / 2
-                        east_boundary = False
-                elif furniture_orientation_sigma_array[k][l] > 0.5 and furniture_orientation_mu_array[k][l] > 0.5:
-                    if south_boundary:
-                        i_center += (i_range - i_size) / 2
-                        south_boundary = False
-                    elif west_boundary:
-                        j_center -= (j_range - j_size) / 2
-                        west_boundary = False
-                    elif east_boundary:
-                        j_center += (j_range - j_size) / 2
-                        east_boundary = False
-            if j_size >= 1 or i_size >= 1 or (i_size > 0 and j_size / i_size >= 2) or (j_size > 0 and i_size / j_size >= 2):
-                if north_boundary and not south_boundary:
-                    i_center -= (i_range - i_size) / 2
-                if south_boundary and not north_boundary:
-                    i_center += (i_range - i_size) / 2
-                if west_boundary and not east_boundary:
-                    j_center -= (j_range - j_size) / 2
-                if east_boundary and not west_boundary:
-                    j_center += (j_range - j_size) / 2
-            if north_boundary and south_boundary and i_size > i_range:
-                i_size = i_range
-            if west_boundary and east_boundary and j_size > j_range:
-                j_size = j_range
-
-            # Define the current furniture's rectangle
-            current_j_min = j_center - j_size / 2
-            current_i_min = i_center - i_size / 2
-            current_j_max = j_center + j_size / 2
-            current_i_max = i_center + i_size / 2
-            furniture_rect_list.append([current_j_min, current_i_min, current_j_max, current_i_max])
-        drawn_furniture_rects.append(furniture_rect_list)
-
-
-    for k in range(num_rooms):
-        for l1, l2 in itertools.combinations(range(num_furnitures[k]), 2):
-            rect1 = drawn_furniture_rects[k][l1]
-            rect2 = drawn_furniture_rects[k][l2]
-            j1_min, i1_min, j1_max, i1_max = rect1
-            j2_min, i2_min, j2_max, i2_max = rect2
-
-            overlap_j_min = max(j1_min, j2_min)
-            overlap_i_min = max(i1_min, i2_min)
-            overlap_j_max = min(j1_max, j2_max)
-            overlap_i_max = min(i1_max, i2_max)
-
-            # Check for overlapping
-            if (overlap_j_max > overlap_j_min) and (overlap_i_max > overlap_i_min):
-                overlap_j = overlap_j_max - overlap_j_min
-                overlap_i = overlap_i_max - overlap_i_min
-
-                if overlap_j > overlap_i:
-                    if i1_min < i2_min:
-                        drawn_furniture_rects[k][l1][3] -= overlap_i / 2
-                        drawn_furniture_rects[k][l2][1] += overlap_i / 2
-                    else:
-                        drawn_furniture_rects[k][l2][3] -= overlap_i / 2
-                        drawn_furniture_rects[k][l1][1] += overlap_i / 2
-                else:
-                    if j1_min < j2_min:
-                        drawn_furniture_rects[k][l1][2] -= overlap_j / 2
-                        drawn_furniture_rects[k][l2][0] += overlap_j / 2
-                    else:
-                        drawn_furniture_rects[k][l2][2] -= overlap_j / 2
-                        drawn_furniture_rects[k][l1][0] += overlap_j / 2
+    # Rectangle geometry (real-size clamped to the allocated grid cell, with
+    # wall-alignment snapping) is shared with the CAD-style renderer -- see
+    # utils/furniture_layout_geometry.py for why the clamp alone is enough to
+    # guarantee no overlap between different furniture items.
+    drawn_furniture_rects = compute_furniture_draw_rects(
+        num_rooms,
+        width,
+        length,
+        x_array,
+        furniture_array,
+        furniture_orientation_sigma_array,
+        furniture_orientation_mu_array,
+        f_rect_min_i_array,
+        f_rect_min_j_array,
+        furniture_info,
+        furniture_constraints,
+    )
+    warn_on_furniture_overlaps(drawn_furniture_rects, room_name_list)
 
     # Draw furniture
     for k in range(num_rooms):
