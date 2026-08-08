@@ -154,7 +154,11 @@ def synthesis(session_id):
         furniture,
         furniture_constraints,
     )
-    fine_model.optimize(fine_x_array)
+    # Optimize quality directly.  A separate zero-objective feasibility solve
+    # repeats the same lazy-connectivity search and only provides a warm start;
+    # on the regression studio it added about a minute without improving the
+    # final incumbent or bound.
+    fine_model.optimize(fine_x_array, stage_num=1)
     # fine_model.two_stage_optimize(fine_x_array)  # only for ablation test
 
 

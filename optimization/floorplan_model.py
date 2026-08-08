@@ -7,6 +7,7 @@ from gurobipy import *
 from constants import *
 from optimization.grid_model import PassageGrid, RoomGrid
 from optimization.model_utils import (
+    add_room_rectangularity_constraints,
     add_room_adjacency_constraints,
     add_room_bounding_box_constraints,
     add_room_corner_constraints,
@@ -14,6 +15,7 @@ from optimization.model_utils import (
     configure_model_log,
     run_staged_optimization,
 )
+from utils.connectivity import connected_components, separator_cuts
 from utils.floorplan_visualization import visualize_floorplan
 from utils.floorplan_visualization_cadstyle import visualize_floorplan_cadstyle
 from utils.post_process import add_wall
@@ -87,6 +89,129 @@ class FloorplanModel:
     def post_process(self):
         self.wall_array = add_wall(self)
 
+    def _build_visualization_callback(self):
+        def visualization_callback(model, where):
+            if not hasattr(model, "_callback_data"):
+                model._callback_data = {
+                    "last_update": time.time(),
+                    "iteration": 0,
+                    "update_interval": 5,
+                }
+            data = model._callback_data
+            current_time = time.time()
+            if (
+                where == GRB.Callback.MIPSOL
+                and current_time - data["last_update"]
+                >= data["update_interval"]
+            ):
+                data["iteration"] += 1
+                for i, j in self.valid_coordinates:
+                    self.passage_array[i, j] = model.cbGetSolution(
+                        self.passage[i, j]
+                    )
+                    for room_index in range(self.room_num):
+                        self.x_array[room_index, i, j] = (
+                            model.cbGetSolution(
+                                self.x[room_index, i, j]
+                            )
+                        )
+                visualize_floorplan(
+                    self.x_array,
+                    self.passage_array,
+                    self.outdoor_space_array,
+                    None,
+                    self.room_name_list,
+                    str(self.visualization_dir / f"{self.model_name}.png"),
+                )
+                data["last_update"] = current_time
+
+        return visualization_callback
+
+    def _build_connectivity_callback(self, visualization_callback=None):
+        self.model._connectivity_cut_keys = set()
+        self.model._connectivity_lazy_stats = {
+            "mipsol_calls": 0,
+            "rejected_candidates": 0,
+            "accepted_candidates": 0,
+            "room_cuts": 0,
+            "free_cuts": 0,
+            "cuts_added": 0,
+        }
+        room_solution_keys = [
+            (room_index, coordinate)
+            for room_index in range(self.room_num)
+            for coordinate in self.valid_coordinates
+        ]
+        room_solution_vars = [
+            self.x[room_index, *coordinate]
+            for room_index, coordinate in room_solution_keys
+        ]
+
+        def connectivity_callback(model, where):
+            if where != GRB.Callback.MIPSOL:
+                if visualization_callback is not None:
+                    visualization_callback(model, where)
+                return
+
+            stats = model._connectivity_lazy_stats
+            stats["mipsol_calls"] += 1
+            room_solution = model.cbGetSolution(room_solution_vars)
+            active_by_room = [set() for _ in range(self.room_num)]
+            for (
+                room_index,
+                coordinate,
+            ), value in zip(room_solution_keys, room_solution):
+                if value > 0.5:
+                    active_by_room[room_index].add(coordinate)
+
+            candidate_is_disconnected = False
+            for room_index in range(self.room_num):
+                components = connected_components(
+                    active_by_room[room_index],
+                    self.valid_coordinates,
+                )
+                cuts = separator_cuts(components, self.valid_coordinates)
+                if cuts:
+                    candidate_is_disconnected = True
+                for cut in cuts:
+                    cut_key = (
+                        "room",
+                        room_index,
+                        cut.component,
+                        cut.boundary,
+                        cut.source,
+                        cut.target,
+                    )
+                    if cut_key in model._connectivity_cut_keys:
+                        continue
+                    model._connectivity_cut_keys.add(cut_key)
+                    model.cbLazy(
+                        quicksum(
+                            self.x[room_index, *coordinate]
+                            for coordinate in sorted(cut.boundary)
+                        )
+                        >= (
+                            self.x[room_index, *cut.source]
+                            + self.x[room_index, *cut.target]
+                            - 1
+                        )
+                    )
+                    stats["room_cuts"] += 1
+                    stats["cuts_added"] += 1
+
+            if candidate_is_disconnected:
+                stats["rejected_candidates"] += 1
+                return
+
+            stats["accepted_candidates"] += 1
+            if visualization_callback is not None:
+                visualization_callback(model, where)
+
+        connectivity_callback.reset = (
+            lambda: self.model._connectivity_cut_keys.clear()
+        )
+        return connectivity_callback
+
     def set_objective_function(self):
         # Area Error Term
         # Create auxiliary variables to represent area errors.
@@ -150,17 +275,17 @@ class FloorplanModel:
 
         # Rectangularity Term
         # Penalize the difference between the room area and its bounding box area
-        # Create slack variables to measure the difference between the room area and its bounding box area
-        rect_diff_slack = self.model.addVars(
-            self.room_num, vtype=GRB.INTEGER, lb=0, name="rect_diff_slack"
+        rect_diff_slack = add_room_rectangularity_constraints(
+            self.model,
+            self.x,
+            room_num=self.room_num,
+            valid_coordinates=self.valid_coordinates,
+            rect_len_i=self.rect_len_i,
+            rect_len_j=self.rect_len_j,
+            width=self.width,
+            length=self.length,
         )
         for k in range(self.room_num):
-            self.model.addConstr(
-                self.rect_len_i[k] * self.rect_len_j[k]
-                - quicksum(self.x[k, i, j] for i, j in self.valid_coordinates)
-                <= rect_diff_slack[k],
-                name=f"rect_slack_def_{k}",
-            )
             self.objective_function += (
                 self.weights["rectangularity"] * rect_diff_slack[k]
             )
@@ -217,44 +342,24 @@ class FloorplanModel:
             self.objective_function += self.weights["privacy"] * privacy_slack[i]
 
     def optimize(self, stage_num: int = 2):
-        # Define callback functions for dynamic visualization
-        def visualization_callback(model, where):
-            # Using closures to save state
-            if not hasattr(model, "_callback_data"):
-                model._callback_data = {
-                    "last_update": time.time(),
-                    "iteration": 0,
-                    "update_interval": 5,  # The interval between updating the visualization
-                }
-            data = model._callback_data
-            current_time = time.time()
-            if where == GRB.Callback.MIPSOL:
-                if current_time - data["last_update"] >= data["update_interval"]:
-                    data["iteration"] += 1
-                    for i, j in self.valid_coordinates:
-                        self.passage_array[i, j] = model.cbGetSolution(
-                            self.passage[i, j]
-                        )
-                        for k in range(self.room_num):
-                            self.x_array[k, i, j] = model.cbGetSolution(self.x[k, i, j])
-
-                    visualize_floorplan(
-                        self.x_array,
-                        self.passage_array,
-                        self.outdoor_space_array,
-                        None,
-                        self.room_name_list,
-                        str(self.visualization_dir / f"{self.model_name}.png"),
-                    )
-                    data["last_update"] = current_time
-
+        self.model.Params.LazyConstraints = 1
+        connectivity_callback = self._build_connectivity_callback(
+            self._build_visualization_callback()
+        )
         run_staged_optimization(
             self.model,
             self.model_name,
             self.objective_function,
             stage_num,
             self.output_dir,
-            visualization_callback,
+            callback=connectivity_callback,
+        )
+        connectivity_stats = self.model._connectivity_lazy_stats
+        print(
+            "Coarse lazy connectivity: "
+            f"callbacks={connectivity_stats['mipsol_calls']} "
+            f"rejected={connectivity_stats['rejected_candidates']} "
+            f"cuts={connectivity_stats['cuts_added']}"
         )
 
         # If the model is infeasible, output infeasible constraint report
@@ -311,17 +416,61 @@ class FloorplanModel:
         else:
             print(f"Model solving failed, status code: {self.model.status}")
 
+    def _add_room_connectivity_cuts(self, round_index: int) -> int:
+        cuts_added = 0
+        for room_index in range(self.room_num):
+            active_coordinates = {
+                coordinate
+                for coordinate in self.valid_coordinates
+                if self.x[room_index, *coordinate].X > 0.5
+            }
+            components = connected_components(
+                active_coordinates,
+                self.valid_coordinates,
+            )
+            cuts = separator_cuts(components, self.valid_coordinates)
+            for cut_index, cut in enumerate(cuts):
+                self.model.addConstr(
+                    quicksum(
+                        self.x[room_index, *coordinate]
+                        for coordinate in sorted(cut.boundary)
+                    )
+                    >= (
+                        self.x[room_index, *cut.source]
+                        + self.x[room_index, *cut.target]
+                        - 1
+                    ),
+                    name=(
+                        f"room_connectivity_r{round_index}"
+                        f"_k{room_index}_c{cut_index}"
+                    ),
+                )
+                cuts_added += 1
+        return cuts_added
+
     def set_log(self):
         configure_model_log(self.model, self.model_name, self.output_dir)
 
     def set_constraints(self):
         self.add_passage_basic_constraints()
+        self.add_room_nonempty_constraints()
         self.add_flow_constraints()
 
         self.add_room_bounding_box_constraints()
         self.add_room_at_corner_constraints()
         self.add_room_adjacent_constraints()
         self.add_room_accessibility_constraints()
+
+    def add_room_nonempty_constraints(self):
+        for room_index in range(self.room_num):
+            self.model.addConstr(
+                quicksum(
+                    self.x[room_index, *coordinate]
+                    for coordinate in self.valid_coordinates
+                )
+                >= 1,
+                name=f"room_nonempty_{room_index}",
+            )
 
     def add_room_at_corner_constraints(self):
         add_room_corner_constraints(
@@ -370,7 +519,8 @@ class FloorplanModel:
             self.x,
             self.room_num,
             self.valid_coordinates,
-            self.BigM,
+            self.BigM_i,
+            self.BigM_j,
             self.rect_min_i,
             self.rect_len_i,
             self.rect_min_j,
@@ -420,13 +570,13 @@ class FloorplanModel:
                 inflow_passage += f_passage[WEST, i, j + 1]  # Flowing in from the east
                 self.model.addConstr(
                     f_passage[EAST, i, j]
-                    <= self.BigM
+                    <= self.BigM_flow
                     * passage_or_openroom_expr[(i, j)],  # Flow from valid node
                     name=f"passage_flow_limit_east_from_{i}_{j}",
                 )
                 self.model.addConstr(
                     f_passage[EAST, i, j]
-                    <= self.BigM
+                    <= self.BigM_flow
                     * passage_or_openroom_expr[
                         neighbor_coord_east
                     ],  # Flow to valid node
@@ -440,12 +590,13 @@ class FloorplanModel:
                 inflow_passage += f_passage[EAST, i, j - 1]  # Flowing in from the west
                 self.model.addConstr(
                     f_passage[WEST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)],
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)],
                     name=f"passage_flow_limit_west_from_{i}_{j}",
                 )
                 self.model.addConstr(
                     f_passage[WEST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_west],
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_west],
                     name=f"passage_flow_limit_west_to_{i}_{j-1}",
                 )
 
@@ -458,12 +609,13 @@ class FloorplanModel:
                 ]  # Flowing in from the south
                 self.model.addConstr(
                     f_passage[SOUTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)],
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)],
                     name=f"passage_flow_limit_south_from_{i}_{j}",
                 )
                 self.model.addConstr(
                     f_passage[SOUTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_south],
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_south],
                     name=f"passage_flow_limit_south_to_{i+1}_{j}",
                 )
 
@@ -476,12 +628,13 @@ class FloorplanModel:
                 ]  # Flowing in from the north
                 self.model.addConstr(
                     f_passage[NORTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)],
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)],
                     name=f"passage_flow_limit_north_from_{i}_{j}",
                 )
                 self.model.addConstr(
                     f_passage[NORTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_north],
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_north],
                     name=f"passage_flow_limit_north_to_{i-1}_{j}",
                 )
 
@@ -506,10 +659,32 @@ class FloorplanModel:
                 )
 
     def add_room_adjacent_constraints(self):
+        open_room_names = {
+            self.room_name_list[room_index]
+            for room_index in self.open_room_indices
+        }
+        room_adjacency = self.room_constraints["room_adjacency"]
+        coarse_adjacency = [
+            pair
+            for pair in room_adjacency
+            if pair[0] in open_room_names or pair[1] in open_room_names
+        ]
+        deferred_adjacency = [
+            pair for pair in room_adjacency if pair not in coarse_adjacency
+        ]
+        if deferred_adjacency:
+            print(
+                "Coarse grid defers closed-room adjacency constraints "
+                f"to Fine grid: {deferred_adjacency}"
+            )
+        coarse_room_constraints = {
+            **self.room_constraints,
+            "room_adjacency": coarse_adjacency,
+        }
         add_room_adjacency_constraints(
             self.model,
             self.x,
-            self.room_constraints,
+            coarse_room_constraints,
             self.room_name_list,
             self.valid_coordinates,
         )

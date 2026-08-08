@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 import numpy as np
 from gurobipy import *
 
@@ -7,6 +8,7 @@ from gurobipy import *
 from constants import *
 from optimization.grid_model import FurnitureGrid, PassageGrid, RoomGrid
 from optimization.model_utils import (
+    add_room_rectangularity_constraints,
     add_room_adjacency_constraints,
     add_room_bounding_box_constraints,
     add_room_corner_constraints,
@@ -14,9 +16,18 @@ from optimization.model_utils import (
     configure_model_log,
     run_staged_optimization,
 )
+from utils.connectivity import (
+    connected_components,
+    separator_cuts,
+    validate_layout_connectivity,
+)
 from utils.post_process import add_door, add_wall, add_window, rearrange
 from utils.floorplan_visualization import visualize_floorplan_with_furniture
 from utils.floorplan_visualization_cadstyle import visualize_floorplan_with_furniture_cadstyle
+
+
+logger = logging.getLogger(__name__)
+
 
 class CooptModel:
     def __init__(
@@ -275,6 +286,208 @@ class CooptModel:
 
         return visualization_callback
 
+    def _build_connectivity_callback(self, visualization_callback=None):
+        self.model._connectivity_cut_keys = set()
+        self.model._connectivity_lazy_stats = {
+            "mipsol_calls": 0,
+            "rejected_candidates": 0,
+            "accepted_candidates": 0,
+            "room_cuts": 0,
+            "free_cuts": 0,
+            "cuts_added": 0,
+        }
+        room_solution_keys = [
+            (room_index, coordinate)
+            for room_index in range(self.room_num)
+            for coordinate in self.valid_coordinates
+        ]
+        room_solution_vars = [
+            self.x[room_index, *coordinate]
+            for room_index, coordinate in room_solution_keys
+        ]
+        furniture_solution_keys = [
+            (room_index, furniture_index, coordinate)
+            for room_index in self.common_room_indices
+            for furniture_index in range(
+                self.furniture_num_list[room_index]
+            )
+            for coordinate in self.valid_coordinates
+        ]
+        furniture_solution_vars = [
+            self.furniture[
+                room_index,
+                furniture_index,
+                *coordinate,
+            ]
+            for (
+                room_index,
+                furniture_index,
+                coordinate,
+            ) in furniture_solution_keys
+        ]
+
+        def connectivity_callback(model, where):
+            if where != GRB.Callback.MIPSOL:
+                if visualization_callback is not None:
+                    visualization_callback(model, where)
+                return
+
+            stats = model._connectivity_lazy_stats
+            stats["mipsol_calls"] += 1
+            room_solution = model.cbGetSolution(room_solution_vars)
+            room_value_by_coordinate = {}
+            active_by_room = [set() for _ in range(self.room_num)]
+            for (
+                room_index,
+                coordinate,
+            ), value in zip(room_solution_keys, room_solution):
+                room_value_by_coordinate[room_index, coordinate] = value
+                if value > 0.5:
+                    active_by_room[room_index].add(coordinate)
+
+            furniture_occupancy = {
+                (room_index, coordinate): 0.0
+                for room_index in self.common_room_indices
+                for coordinate in self.valid_coordinates
+            }
+            if furniture_solution_vars:
+                furniture_solution = model.cbGetSolution(
+                    furniture_solution_vars
+                )
+                for (
+                    room_index,
+                    _,
+                    coordinate,
+                ), value in zip(
+                    furniture_solution_keys,
+                    furniture_solution,
+                ):
+                    furniture_occupancy[room_index, coordinate] += value
+
+            candidate_is_disconnected = False
+
+            for room_index in range(self.room_num):
+                components = connected_components(
+                    active_by_room[room_index],
+                    self.valid_coordinates,
+                )
+                cuts = separator_cuts(components, self.valid_coordinates)
+                if cuts:
+                    candidate_is_disconnected = True
+                for cut in cuts:
+                    cut_key = (
+                        "room",
+                        room_index,
+                        cut.component,
+                        cut.boundary,
+                        cut.source,
+                        cut.target,
+                    )
+                    if cut_key in model._connectivity_cut_keys:
+                        continue
+                    model._connectivity_cut_keys.add(cut_key)
+                    model.cbLazy(
+                        quicksum(
+                            self.x[room_index, *coordinate]
+                            for coordinate in sorted(cut.boundary)
+                        )
+                        >= (
+                            self.x[room_index, *cut.source]
+                            + self.x[room_index, *cut.target]
+                            - 1
+                        )
+                    )
+                    stats["room_cuts"] += 1
+                    stats["cuts_added"] += 1
+
+            for room_index in self.common_room_indices:
+                free_coordinates = {
+                    coordinate
+                    for coordinate in self.valid_coordinates
+                    if (
+                        room_value_by_coordinate[room_index, coordinate]
+                        - furniture_occupancy[room_index, coordinate]
+                        > 0.5
+                    )
+                }
+                components = connected_components(
+                    free_coordinates,
+                    self.valid_coordinates,
+                )
+                cuts = separator_cuts(components, self.valid_coordinates)
+                if cuts:
+                    candidate_is_disconnected = True
+                for cut in cuts:
+                    cut_key = (
+                        "free",
+                        room_index,
+                        cut.component,
+                        cut.boundary,
+                        cut.source,
+                        cut.target,
+                    )
+                    if cut_key in model._connectivity_cut_keys:
+                        continue
+                    model._connectivity_cut_keys.add(cut_key)
+                    boundary_free = quicksum(
+                        self.x[room_index, *coordinate]
+                        - quicksum(
+                            self.furniture[
+                                room_index,
+                                furniture_index,
+                                *coordinate,
+                            ]
+                            for furniture_index in range(
+                                self.furniture_num_list[room_index]
+                            )
+                        )
+                        for coordinate in sorted(cut.boundary)
+                    )
+                    source_free = (
+                        self.x[room_index, *cut.source]
+                        - quicksum(
+                            self.furniture[
+                                room_index,
+                                furniture_index,
+                                *cut.source,
+                            ]
+                            for furniture_index in range(
+                                self.furniture_num_list[room_index]
+                            )
+                        )
+                    )
+                    target_free = (
+                        self.x[room_index, *cut.target]
+                        - quicksum(
+                            self.furniture[
+                                room_index,
+                                furniture_index,
+                                *cut.target,
+                            ]
+                            for furniture_index in range(
+                                self.furniture_num_list[room_index]
+                            )
+                        )
+                    )
+                    model.cbLazy(
+                        boundary_free >= source_free + target_free - 1
+                    )
+                    stats["free_cuts"] += 1
+                    stats["cuts_added"] += 1
+
+            if candidate_is_disconnected:
+                stats["rejected_candidates"] += 1
+                return
+
+            stats["accepted_candidates"] += 1
+            if visualization_callback is not None:
+                visualization_callback(model, where)
+
+        connectivity_callback.reset = (
+            lambda: self.model._connectivity_cut_keys.clear()
+        )
+        return connectivity_callback
+
     def _render_final_layout(self):
         visualize_floorplan_with_furniture(
             self.x_array,
@@ -328,11 +541,24 @@ class CooptModel:
             if self.model.SolCount > 0:
                 self.get_solution()
                 self.post_process()
+                self._validate_final_arrays()
                 self._render_final_layout()
             else:
                 print("No feasible solution found")
         else:
             print(f"Model solving failed, status code: {self.model.status}")
+
+    def _validate_final_arrays(self):
+        return validate_layout_connectivity(
+            self.x_array,
+            self.furniture_array,
+            room_names=getattr(
+                self,
+                "room_name_list",
+                [str(index) for index in range(self.room_num)],
+            ),
+            closed_room_indices=self.common_room_indices,
+        )
 
     def _export_iis_if_infeasible(self):
         if self.model.status == GRB.INFEASIBLE:
@@ -394,28 +620,42 @@ class CooptModel:
         # Minimize room perimeter/maximize room interior adjacency
         for k in range(self.room_num):
             for i, j in self.valid_coordinates:
-                # East
-                self.objective_function += self.weights["perimeter"] * (1 - self.x[k, i, j + 1]) * self.x[k, i, j] if (i, j + 1) in self.valid_coordinates else 0
-                # West
-                self.objective_function += self.weights["perimeter"] * (1 - self.x[k, i, j - 1]) * self.x[k, i, j] if (i, j - 1) in self.valid_coordinates else 0
-                # South
-                self.objective_function += self.weights["perimeter"] * (1 - self.x[k, i + 1, j]) * self.x[k, i, j] if (i + 1, j) in self.valid_coordinates else 0
-                # North
-                self.objective_function += self.weights["perimeter"] * (1 - self.x[k, i - 1, j]) * self.x[k, i, j] if (i - 1, j) in self.valid_coordinates else 0
+                for neighbor_i, neighbor_j in (
+                    (i, j + 1),
+                    (i, j - 1),
+                    (i + 1, j),
+                    (i - 1, j),
+                ):
+                    if (
+                        neighbor_i,
+                        neighbor_j,
+                    ) in self.valid_coordinates_set:
+                        self.objective_function += (
+                            self.weights["perimeter"]
+                            * (
+                                1
+                                - self.x[
+                                    k,
+                                    neighbor_i,
+                                    neighbor_j,
+                                ]
+                            )
+                            * self.x[k, i, j]
+                        )
 
         # Rectangularity Term
         # Penalize the difference between the room area and its bounding box area
-        # Create slack variables to measure the difference between the room area and its bounding box area
-        rect_diff_slack = self.model.addVars(
-            self.room_num, vtype=GRB.INTEGER, lb=0, name="rect_diff_slack"
+        rect_diff_slack = add_room_rectangularity_constraints(
+            self.model,
+            self.x,
+            room_num=self.room_num,
+            valid_coordinates=self.valid_coordinates,
+            rect_len_i=self.rect_len_i,
+            rect_len_j=self.rect_len_j,
+            width=self.width,
+            length=self.length,
         )
         for k in range(self.room_num):
-            self.model.addConstr(
-                self.rect_len_i[k] * self.rect_len_j[k]
-                - quicksum(self.x[k, i, j] for i, j in self.valid_coordinates)
-                <= rect_diff_slack[k],
-                name=f"rect_slack_def_{k}",
-            )
             self.objective_function += self.weights["rectangularity"] * rect_diff_slack[k]
         
         # Shape ratio Term
@@ -543,13 +783,35 @@ class CooptModel:
                 f"Added objective penalty terms for {penalty_count} grid cells based on coarse solution.\n"
             )
 
+        self.model.Params.LazyConstraints = 1
+        connectivity_callback = self._build_connectivity_callback(
+            self._build_visualization_callback()
+        )
         run_staged_optimization(
             self.model,
             self.model_name,
             self.objective_function,
             stage_num,
             self.output_dir,
-            self._build_visualization_callback(),
+            callback=connectivity_callback,
+        )
+        connectivity_stats = self.model._connectivity_lazy_stats
+        logger.info(
+            "Fine lazy connectivity: callbacks=%d rejected=%d "
+            "room_cuts=%d free_cuts=%d cuts=%d",
+            connectivity_stats["mipsol_calls"],
+            connectivity_stats["rejected_candidates"],
+            connectivity_stats["room_cuts"],
+            connectivity_stats["free_cuts"],
+            connectivity_stats["cuts_added"],
+        )
+        print(
+            "Fine lazy connectivity: "
+            f"callbacks={connectivity_stats['mipsol_calls']} "
+            f"rejected={connectivity_stats['rejected_candidates']} "
+            f"room_cuts={connectivity_stats['room_cuts']} "
+            f"free_cuts={connectivity_stats['free_cuts']} "
+            f"cuts={connectivity_stats['cuts_added']}"
         )
         self._export_iis_if_infeasible()
         self._finalize_solution()
@@ -566,16 +828,158 @@ class CooptModel:
                     self.model.addConstr(
                         self.x[k, i, j] == 0
                     )
+        self.model.Params.LazyConstraints = 1
+        connectivity_callback = self._build_connectivity_callback(
+            self._build_visualization_callback()
+        )
         run_staged_optimization(
             self.model,
             self.model_name,
             self.objective_function,
             1,
             self.output_dir,
-            self._build_visualization_callback(),
+            callback=connectivity_callback,
+        )
+        connectivity_stats = self.model._connectivity_lazy_stats
+        logger.info(
+            "Fine lazy connectivity: callbacks=%d rejected=%d "
+            "room_cuts=%d free_cuts=%d cuts=%d",
+            connectivity_stats["mipsol_calls"],
+            connectivity_stats["rejected_candidates"],
+            connectivity_stats["room_cuts"],
+            connectivity_stats["free_cuts"],
+            connectivity_stats["cuts_added"],
+        )
+        print(
+            "Fine lazy connectivity: "
+            f"callbacks={connectivity_stats['mipsol_calls']} "
+            f"rejected={connectivity_stats['rejected_candidates']} "
+            f"room_cuts={connectivity_stats['room_cuts']} "
+            f"free_cuts={connectivity_stats['free_cuts']} "
+            f"cuts={connectivity_stats['cuts_added']}"
         )
         self._export_iis_if_infeasible()
         self._finalize_solution()
+
+    def _add_connectivity_cuts(self, round_index: int) -> int:
+        room_cuts_added = 0
+        free_cuts_added = 0
+
+        for room_index in range(self.room_num):
+            active_coordinates = {
+                coordinate
+                for coordinate in self.valid_coordinates
+                if self.x[room_index, *coordinate].X > 0.5
+            }
+            components = connected_components(
+                active_coordinates,
+                self.valid_coordinates,
+            )
+            cuts = separator_cuts(components, self.valid_coordinates)
+            for cut_index, cut in enumerate(cuts):
+                self.model.addConstr(
+                    quicksum(
+                        self.x[room_index, *coordinate]
+                        for coordinate in sorted(cut.boundary)
+                    )
+                    >= (
+                        self.x[room_index, *cut.source]
+                        + self.x[room_index, *cut.target]
+                        - 1
+                    ),
+                    name=(
+                        f"room_connectivity_r{round_index}"
+                        f"_k{room_index}_c{cut_index}"
+                    ),
+                )
+                room_cuts_added += 1
+
+        for room_index in self.common_room_indices:
+            free_coordinates = {
+                coordinate
+                for coordinate in self.valid_coordinates
+                if (
+                    self.x[room_index, *coordinate].X
+                    - sum(
+                        self.furniture[
+                            room_index,
+                            furniture_index,
+                            *coordinate,
+                        ].X
+                        for furniture_index in range(
+                            self.furniture_num_list[room_index]
+                        )
+                    )
+                    > 0.5
+                )
+            }
+            components = connected_components(
+                free_coordinates,
+                self.valid_coordinates,
+            )
+            cuts = separator_cuts(components, self.valid_coordinates)
+            for cut_index, cut in enumerate(cuts):
+                boundary_free = quicksum(
+                    self.x[room_index, *coordinate]
+                    - quicksum(
+                        self.furniture[
+                            room_index,
+                            furniture_index,
+                            *coordinate,
+                        ]
+                        for furniture_index in range(
+                            self.furniture_num_list[room_index]
+                        )
+                    )
+                    for coordinate in sorted(cut.boundary)
+                )
+                source_free = (
+                    self.x[room_index, *cut.source]
+                    - quicksum(
+                        self.furniture[
+                            room_index,
+                            furniture_index,
+                            *cut.source,
+                        ]
+                        for furniture_index in range(
+                            self.furniture_num_list[room_index]
+                        )
+                    )
+                )
+                target_free = (
+                    self.x[room_index, *cut.target]
+                    - quicksum(
+                        self.furniture[
+                            room_index,
+                            furniture_index,
+                            *cut.target,
+                        ]
+                        for furniture_index in range(
+                            self.furniture_num_list[room_index]
+                        )
+                    )
+                )
+                self.model.addConstr(
+                    boundary_free >= source_free + target_free - 1,
+                    name=(
+                        f"free_connectivity_r{round_index}"
+                        f"_k{room_index}_c{cut_index}"
+                    ),
+                )
+                free_cuts_added += 1
+
+        logger.info(
+            "Fine connectivity round %d: room_cuts=%d free_cuts=%d",
+            round_index,
+            room_cuts_added,
+            free_cuts_added,
+        )
+        print(
+            f"Fine connectivity round {round_index}: "
+            f"room_cuts={room_cuts_added} "
+            f"free_cuts={free_cuts_added}"
+        )
+        return room_cuts_added + free_cuts_added
 
     def get_solution(self):
         for i, j in self.valid_coordinates:
@@ -603,6 +1007,7 @@ class CooptModel:
         configure_model_log(self.model, self.model_name, self.output_dir)
 
     def set_constraints(self):
+        self.add_room_nonempty_constraints()
         self.add_room_adjacent_constraints()
         self.add_room_bounding_box_constraints()
         self.add_room_at_corner_constraints()
@@ -612,6 +1017,17 @@ class CooptModel:
         self.add_furniture_relation_constraints()
         self.add_furniture_boundary_constraints()
         self.add_room_furniture_basic_constraints()
+
+    def add_room_nonempty_constraints(self):
+        for room_index in range(self.room_num):
+            self.model.addConstr(
+                quicksum(
+                    self.x[room_index, *coordinate]
+                    for coordinate in self.valid_coordinates
+                )
+                >= 1,
+                name=f"room_nonempty_{room_index}",
+            )
 
     def post_process(self):
         self.door_array = add_door(self)
@@ -688,7 +1104,8 @@ class CooptModel:
             self.x,
             self.room_num,
             self.valid_coordinates,
-            self.BigM,
+            self.BigM_i,
+            self.BigM_j,
             self.rect_min_i,
             self.rect_len_i,
             self.rect_min_j,
@@ -713,11 +1130,12 @@ class CooptModel:
                 inflow_passage += self.flow[WEST, i, j + 1]
                 self.model.addConstr(
                     self.flow[EAST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)]
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)]
                 )
                 self.model.addConstr(
                     self.flow[EAST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_east]
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_east]
                 )
 
             neighbor_coord_west = (i, j - 1)
@@ -726,11 +1144,12 @@ class CooptModel:
                 inflow_passage += self.flow[EAST, i, j - 1]
                 self.model.addConstr(
                     self.flow[WEST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)]
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)]
                 )
                 self.model.addConstr(
                     self.flow[WEST, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_west]
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_west]
                 )
             
             neighbor_coord_south = (i + 1, j)
@@ -739,11 +1158,12 @@ class CooptModel:
                 inflow_passage += self.flow[NORTH, i + 1, j]
                 self.model.addConstr(
                     self.flow[SOUTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)]
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)]
                 )
                 self.model.addConstr(
                     self.flow[SOUTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_south]
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_south]
                 )
             
             neighbor_coord_north = (i - 1, j)
@@ -752,11 +1172,12 @@ class CooptModel:
                 inflow_passage += self.flow[SOUTH, i - 1, j]
                 self.model.addConstr(
                     self.flow[NORTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[(i, j)]
+                    <= self.BigM_flow * passage_or_openroom_expr[(i, j)]
                 )
                 self.model.addConstr(
                     self.flow[NORTH, i, j]
-                    <= self.BigM * passage_or_openroom_expr[neighbor_coord_north]
+                    <= self.BigM_flow
+                    * passage_or_openroom_expr[neighbor_coord_north]
                 )
 
             if (i, j) == (self.entrance[1], self.entrance[2]):
@@ -855,7 +1276,7 @@ class CooptModel:
                 # Furniture shape constraint: rectangular
                 self.model.addConstrs(
                     self.f_rect_min_i[k, l]
-                    <= i + self.BigM * (1 - self.furniture[k, l, i, j])
+                    <= i + self.BigM_i * (1 - self.furniture[k, l, i, j])
                     for (i, j) in self.valid_coordinates
                 )
                 self.model.addConstrs(
@@ -868,7 +1289,7 @@ class CooptModel:
                 )
                 self.model.addConstrs(
                     self.f_rect_min_j[k, l]
-                    <= j + self.BigM * (1 - self.furniture[k, l, i, j])
+                    <= j + self.BigM_j * (1 - self.furniture[k, l, i, j])
                     for (i, j) in self.valid_coordinates
                 )
                 self.model.addConstrs(
@@ -893,13 +1314,29 @@ class CooptModel:
                 )
                 for i, j in self.valid_coordinates:
                     # Case z_0
-                    self.model.addConstr(self.x[k, i - 1, j] >= self.furniture[k, l, i, j] - self.BigM*(1 - z[0]))
+                    self.model.addConstr(
+                        self.x[k, i - 1, j]
+                        >= self.furniture[k, l, i, j]
+                        - self.BigM_binary * (1 - z[0])
+                    )
                     # Case z_1
-                    self.model.addConstr(self.x[k, i + 1, j] >= self.furniture[k, l, i, j] - self.BigM*(1 - z[1]))
+                    self.model.addConstr(
+                        self.x[k, i + 1, j]
+                        >= self.furniture[k, l, i, j]
+                        - self.BigM_binary * (1 - z[1])
+                    )
                     # Case z_2
-                    self.model.addConstr(self.x[k, i, j - 1] >= self.furniture[k, l, i, j] - self.BigM*(1 - z[2]))
+                    self.model.addConstr(
+                        self.x[k, i, j - 1]
+                        >= self.furniture[k, l, i, j]
+                        - self.BigM_binary * (1 - z[2])
+                    )
                     # Case z_3
-                    self.model.addConstr(self.x[k, i, j + 1] >= self.furniture[k, l, i, j] - self.BigM*(1 - z[3]))
+                    self.model.addConstr(
+                        self.x[k, i, j + 1]
+                        >= self.furniture[k, l, i, j]
+                        - self.BigM_binary * (1 - z[3])
+                    )
 
     def add_furniture_relation_constraints(self):
         # Add the objective function for the relative distance between furniture.
@@ -1125,13 +1562,29 @@ class CooptModel:
                         enforce_sum=True,
                     )
                     # Case z_0
-                    self.model.addConstr(self.f_rect_min_i[k, l1] - 1 >= self.f_rect_min_i[k, l2] - self.BigM * (1 - z[0]))
+                    self.model.addConstr(
+                        self.f_rect_min_i[k, l1] - 1
+                        >= self.f_rect_min_i[k, l2]
+                        - self.BigM_i * (1 - z[0])
+                    )
                     # Case z_1
-                    self.model.addConstr(self.f_rect_min_i[k, l1] + 1 <= self.f_rect_min_i[k, l2] + self.BigM * (1 - z[1]))
+                    self.model.addConstr(
+                        self.f_rect_min_i[k, l1] + 1
+                        <= self.f_rect_min_i[k, l2]
+                        + self.BigM_i * (1 - z[1])
+                    )
                     # Case z_2
-                    self.model.addConstr(self.f_rect_min_j[k, l1] - 1 >= self.f_rect_min_j[k, l2] - self.BigM * (1 - z[2]))
+                    self.model.addConstr(
+                        self.f_rect_min_j[k, l1] - 1
+                        >= self.f_rect_min_j[k, l2]
+                        - self.BigM_j * (1 - z[2])
+                    )
                     # Case z_3
-                    self.model.addConstr(self.f_rect_min_j[k, l1] + 1 <= self.f_rect_min_j[k, l2] + self.BigM * (1 - z[3]))
+                    self.model.addConstr(
+                        self.f_rect_min_j[k, l1] + 1
+                        <= self.f_rect_min_j[k, l2]
+                        + self.BigM_j * (1 - z[3])
+                    )
 
 
     def add_furniture_boundary_constraints(self):

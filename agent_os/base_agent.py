@@ -7,6 +7,19 @@ from typing import Any, Dict, List, Union
 from .base_llm import async_talk_to_llm, LLMResult
 
 
+class AgentOutputError(RuntimeError):
+    """Raised when a tool-type agent cannot produce a usable structured
+    output after exhausting its JSON retry budget.
+
+    This is intentionally NOT swallowed anywhere: writing a placeholder
+    like {"text": ""} into memory.json instead of raising would let the
+    pipeline silently continue with unusable data, only to fail several
+    steps later (e.g. deep inside run_optimization.py) with a confusing,
+    unrelated-looking error. Failing fast here, at the source, makes the
+    real cause immediately visible.
+    """
+
+
 class BaseAgent:
     def __init__(self, name: str, memory_path: str, session_id="test"):
         self.name = name
@@ -224,10 +237,17 @@ class BaseAgent:
                             messages, full_response, retry_count
                         )
                         continue
-                    if isinstance(output_parsed, dict):
-                        output = output_parsed
-                    else:
-                        output = {"text": output_parsed}
+                    if should_retry:
+                        # Retry budget exhausted and the output is still not
+                        # usable JSON. Fail loudly instead of writing a
+                        # placeholder into memory.json that would silently
+                        # corrupt every downstream step.
+                        raise AgentOutputError(
+                            f"[{self.name}] failed to produce valid JSON after "
+                            f"{retry_count} retr{'y' if retry_count == 1 else 'ies'}. "
+                            f"Last raw LLM response was:\n{full_response}"
+                        )
+                    output = output_parsed
                 elif self.agent_type == "plan":
                     # for plan-type agents, may return only an action name
                     cleaned_response = cleaned_response.strip().strip('"').strip("'")

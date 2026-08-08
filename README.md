@@ -21,7 +21,7 @@
 ## 📌 TODO
 
 - [X] **Blender 3D Visualization**: A streamlined Blender 3D visualization is now included (see [Usage step 4](#4-run-3d-visualization)), using real furniture assets from the [Imaginarium](https://huggingface.co/datasets/HiHiAllen/Imaginarium-Dataset) asset library. It procedurally builds walls, doors, and windows in addition to furniture and a floor.
-- [ ] **Optimization Acceleration**: Performance improvements and acceleration techniques for the grid-based integer programming.
+- [X] **Optimization Acceleration**: Added dimension-specific tight Big-M bounds, exact linearization of bounded integer products and batched incumbent reads in lazy-connectivity.
 
 ## 📂 Project Structure
 

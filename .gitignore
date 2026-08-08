@@ -10,6 +10,7 @@ output/
 asset_library/
 *.fdb_latexmk
 *.fls
-test/visualization_test/
+test/
 key/llm_key.json
 .cursor/
+docs/

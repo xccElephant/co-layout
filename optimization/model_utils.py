@@ -1,8 +1,194 @@
 import os
+import time
+from dataclasses import dataclass
 
 from gurobipy import GRB, quicksum
 
 from utils.find_boundary import find_boundary_coordinates
+
+
+class ConnectivityOptimizationError(RuntimeError):
+    """Raised when connectivity cuts cannot produce a usable incumbent."""
+
+
+def exact_bounded_integer_product(
+    model,
+    left,
+    right,
+    *,
+    left_upper_bound: int,
+    right_upper_bound: int,
+    name: str,
+):
+    """Return an exact linear expression for ``left * right``.
+
+    Both integer variables must have domain ``1..upper_bound``.  The smaller
+    domain is represented by one-hot selectors, and each selector gates the
+    other variable with an exact binary-times-bounded-variable formulation.
+    """
+    if left_upper_bound < 1 or right_upper_bound < 1:
+        raise ValueError("Integer-product upper bounds must be positive")
+
+    if left_upper_bound <= right_upper_bound:
+        selected = left
+        selected_upper_bound = left_upper_bound
+        other = right
+        other_upper_bound = right_upper_bound
+    else:
+        selected = right
+        selected_upper_bound = right_upper_bound
+        other = left
+        other_upper_bound = left_upper_bound
+
+    values = range(1, selected_upper_bound + 1)
+    selectors = model.addVars(
+        values,
+        vtype=GRB.BINARY,
+        name=f"{name}_select",
+    )
+    gated_other = model.addVars(
+        values,
+        lb=0,
+        ub=other_upper_bound,
+        name=f"{name}_gated",
+    )
+    model.addConstr(
+        quicksum(selectors[value] for value in values) == 1,
+        name=f"{name}_select_one",
+    )
+    model.addConstr(
+        selected
+        == quicksum(
+            value * selectors[value]
+            for value in values
+        ),
+        name=f"{name}_selected_value",
+    )
+    for value in values:
+        model.addConstr(
+            gated_other[value]
+            <= other_upper_bound * selectors[value],
+            name=f"{name}_gate_off_{value}",
+        )
+        model.addConstr(
+            gated_other[value] <= other,
+            name=f"{name}_gate_upper_{value}",
+        )
+        model.addConstr(
+            gated_other[value]
+            >= other
+            - other_upper_bound * (1 - selectors[value]),
+            name=f"{name}_gate_lower_{value}",
+        )
+
+    return quicksum(
+        value * gated_other[value]
+        for value in values
+    )
+
+
+def add_room_rectangularity_constraints(
+    model,
+    x,
+    *,
+    room_num: int,
+    valid_coordinates,
+    rect_len_i,
+    rect_len_j,
+    width: int,
+    length: int,
+):
+    """Create exact linear room bounding-box area slacks."""
+    rect_diff_slack = model.addVars(
+        room_num,
+        vtype=GRB.INTEGER,
+        lb=0,
+        name="rect_diff_slack",
+    )
+    for room_index in range(room_num):
+        bounding_box_area = exact_bounded_integer_product(
+            model,
+            rect_len_i[room_index],
+            rect_len_j[room_index],
+            left_upper_bound=width,
+            right_upper_bound=length,
+            name=f"bbox_area_{room_index}",
+        )
+        model.addConstr(
+            bounding_box_area
+            - quicksum(
+                x[room_index, i, j]
+                for i, j in valid_coordinates
+            )
+            <= rect_diff_slack[room_index],
+            name=f"rect_slack_def_{room_index}",
+        )
+    return rect_diff_slack
+
+
+@dataclass(frozen=True)
+class ConnectivityCutStats:
+    rounds: int
+    cuts_added: int
+    elapsed_seconds: float
+
+
+def run_connectivity_cut_loop(
+    model,
+    separator,
+    callback=None,
+    time_limit=None,
+) -> ConnectivityCutStats:
+    """Add violated connectivity cuts and reoptimize within one time budget."""
+    started = time.monotonic()
+    rounds = 0
+    cuts_added = 0
+    original_time_limit = model.Params.TimeLimit
+    total_time_limit = original_time_limit if time_limit is None else time_limit
+    accepted_statuses = {
+        GRB.OPTIMAL,
+        GRB.TIME_LIMIT,
+        GRB.SUBOPTIMAL,
+        GRB.INTERRUPTED,
+    }
+
+    try:
+        while model.SolCount > 0:
+            if model.Status not in accepted_statuses:
+                raise ConnectivityOptimizationError(
+                    f"Unsupported optimization status: {model.Status}"
+                )
+
+            cut_count = separator(rounds)
+            if cut_count == 0:
+                return ConnectivityCutStats(
+                    rounds=rounds,
+                    cuts_added=cuts_added,
+                    elapsed_seconds=time.monotonic() - started,
+                )
+
+            cuts_added += cut_count
+            remaining = total_time_limit - (time.monotonic() - started)
+            if remaining <= 0:
+                raise ConnectivityOptimizationError(
+                    "Connectivity cut generation exceeded its time limit"
+                )
+
+            for variable in model.getVars():
+                variable.Start = variable.X
+            model.Params.TimeLimit = remaining
+            (
+                model.optimize(callback)
+                if callback is not None
+                else model.optimize()
+            )
+            rounds += 1
+
+        raise ConnectivityOptimizationError(
+            "No incumbent after connectivity cuts"
+        )
+    finally:
+        model.Params.TimeLimit = original_time_limit
 
 
 def configure_model_log(model, model_name: str, output_dir) -> None:
@@ -36,21 +222,30 @@ def run_staged_optimization(
     """
     model.write(os.path.join(output_dir, f"{model_name}.lp"))
 
+    def optimize_with_callback():
+        if callback is None:
+            model.optimize()
+            return
+        reset_callback = getattr(callback, "reset", None)
+        if reset_callback is not None:
+            reset_callback()
+        model.optimize(callback)
+
     if stage_num == 1:
         model.setParam("MIPFocus", 2)
         model.setObjective(objective_function, GRB.MINIMIZE)
-        model.optimize(callback) if callback else model.optimize()
+        optimize_with_callback()
         return
 
     if stage_num == 2:
         model.setParam("MIPFocus", 1)
         model.setObjective(0)  # find a feasible solution
-        model.optimize()
+        optimize_with_callback()
         if model.status == GRB.OPTIMAL:
             model.update()
             model.setParam("MIPFocus", 1)
             model.setObjective(objective_function, GRB.MINIMIZE)  # optimize the objective function
-            model.optimize(callback) if callback else model.optimize()
+            optimize_with_callback()
         return
 
     raise ValueError(f"Unsupported stage_num: {stage_num}")
@@ -92,7 +287,8 @@ def add_room_bounding_box_constraints(
     x,
     room_num: int,
     valid_coordinates: list,
-    big_m: int,
+    big_m_i: int,
+    big_m_j: int,
     rect_min_i,
     rect_len_i,
     rect_min_j,
@@ -102,19 +298,21 @@ def add_room_bounding_box_constraints(
     for k in range(room_num):
         for i, j in valid_coordinates:
             model.addConstr(
-                rect_min_i[k] <= i + big_m * (1 - x[k, i, j]),
+                rect_min_i[k] <= i + big_m_i * (1 - x[k, i, j]),
                 name=f"bbox_min_i_{k}_{i}_{j}",
             )
             model.addConstr(
-                rect_min_i[k] + rect_len_i[k] - 1 >= i - big_m * (1 - x[k, i, j]),
+                rect_min_i[k] + rect_len_i[k] - 1
+                >= i - big_m_i * (1 - x[k, i, j]),
                 name=f"bbox_max_i_{k}_{i}_{j}",
             )
             model.addConstr(
-                rect_min_j[k] <= j + big_m * (1 - x[k, i, j]),
+                rect_min_j[k] <= j + big_m_j * (1 - x[k, i, j]),
                 name=f"bbox_min_j_{k}_{i}_{j}",
             )
             model.addConstr(
-                rect_min_j[k] + rect_len_j[k] - 1 >= j - big_m * (1 - x[k, i, j]),
+                rect_min_j[k] + rect_len_j[k] - 1
+                >= j - big_m_j * (1 - x[k, i, j]),
                 name=f"bbox_max_j_{k}_{i}_{j}",
             )
 
@@ -152,10 +350,22 @@ def build_layout_context(
     ]
     valid_coordinates_set = set(valid_coordinates)
 
+    # Keep the legacy area bound for expressions (notably furniture-distance
+    # relations) whose exact affine range depends on several furniture
+    # dimensions and offsets.  Use the smaller, provably safe bounds below
+    # for coordinate, binary-implication, and flow constraints.
     big_m = width * length
+    big_m_i = max(1, width)
+    big_m_j = max(1, length)
+    big_m_binary = 1
+    big_m_flow = max(1, len(valid_coordinates))
     if print_big_m:
         print("\n" + "-" * 25)
-        print(f"Set Big M = {big_m}")
+        print(
+            "Set Big M bounds: "
+            f"legacy={big_m}, i={big_m_i}, j={big_m_j}, "
+            f"binary={big_m_binary}, flow={big_m_flow}"
+        )
         print("-" * 25)
 
     open_room_indices = []
@@ -192,6 +402,10 @@ def build_layout_context(
 
     return {
         "BigM": big_m,
+        "BigM_i": big_m_i,
+        "BigM_j": big_m_j,
+        "BigM_binary": big_m_binary,
+        "BigM_flow": big_m_flow,
         "room_num": room_num,
         "room_name_list": room_name_list,
         "room_area_list": room_area_list,
