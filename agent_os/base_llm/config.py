@@ -57,6 +57,28 @@ def get_provider_for_model(model_name):
 from litellm import model_cost as _litellm_cost
 
 
+def get_model_max_output_tokens(model_name, default=8192):
+    """Get the maximum output tokens supported by a model.
+
+    Looks up from litellm built-in data; falls back to `default` if the
+    model is unknown or does not report a max output token count. This
+    lets us request a generation budget that matches what the model can
+    actually produce, instead of an arbitrary fixed cap that truncates
+    long structured outputs (e.g. multi-room JSON constraint lists).
+
+    Returns:
+        int
+    """
+    cost_info = _litellm_cost.get(model_name)
+    if cost_info:
+        max_output_tokens = cost_info.get("max_output_tokens") or cost_info.get(
+            "max_tokens"
+        )
+        if max_output_tokens:
+            return max_output_tokens
+    return default
+
+
 def get_model_price(model_name):
     """Get the price of a model (unit: USD per million tokens).
 

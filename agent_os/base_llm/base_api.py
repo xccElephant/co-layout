@@ -19,7 +19,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
 # import configuration from config module
-from config import llm_model_configs, get_model_price, get_provider_for_model
+from config import (
+    llm_model_configs,
+    get_model_max_output_tokens,
+    get_model_price,
+    get_provider_for_model,
+)
 
 
 @dataclass
@@ -179,12 +184,20 @@ async def chat_with_model(
     # newer OpenAI models (gpt-5) require max_completion_tokens and temperature=1.0
     token_key = "max_completion_tokens" if model_name.startswith("gpt-5") else "max_tokens"
 
+    # Use the model's actual max output token budget instead of a fixed 8192
+    # cap. A fixed cap silently truncates long structured JSON outputs (e.g.
+    # multi-room furniture constraint lists) mid-generation, which then fails
+    # JSON parsing and burns through the tool's retry budget for no benefit,
+    # since retries hit the exact same cap. Requesting a higher max_tokens
+    # does not cost more; the model still stops once it finishes.
+    max_output_tokens = get_model_max_output_tokens(model_name)
+
     payload = {
         "model": model_name,
         "messages": messages,
         "temperature": 1.0 if model_name.startswith("gpt-5") else temperature,
         "stream": stream,
-        token_key: 8192,
+        token_key: max_output_tokens,
     }
 
     max_retries = 3
