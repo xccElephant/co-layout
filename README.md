@@ -1,21 +1,5 @@
 <div align="center">
 
-# Co-Layout: LLM-driven Co-optimization<br>for Interior Layout
-
-[Chucheng Xiang](https://xccelephant.github.io/)<sup>1</sup>, Ruchao Bao<sup>1</sup>, Biyin Feng<sup>2</sup>, Wenzheng Wu<sup>1</sup>, [Zhongyuan Liu](https://digiartomnis.github.io/index.html)<sup>3</sup>, Yirui Guan<sup>3</sup>, [Ligang Liu](http://staff.ustc.edu.cn/~lgliu)<sup>1\*</sup>
-
-<sup>1</sup>University of Science and Technology of China &nbsp; <sup>2</sup>Tsinghua University &nbsp; <sup>3</sup>Tencent
-
-**AAAI 2026**
-
-[![arXiv](https://img.shields.io/badge/arXiv-2511.12474-b31b1b.svg)](https://arxiv.org/abs/2511.12474) [![Project Page](https://img.shields.io/badge/Project-Page-blue.svg)](https://xccelephant.github.io/paper/co-layout/)
-
-![Gallery](assets/gallery.jpg)
-
-**TL;DR**: We present a novel framework for automated interior design that combines large language models (LLMs) with grid-based integer programming to jointly optimize room layout and furniture placement.
-
-</div>
-
 ---
 
 ## 📌 TODO
@@ -193,6 +177,8 @@ Optional arguments:
 | `--camera-azimuth` / `--camera-elevation` | `235` / `55` (degrees)                             | Camera framing; elevation needs to stay fairly high so the camera can see over the walls into the rooms |
 | `--show-axes`                               | off                                                    | Draw an RGB world-axis indicator (debugging aid)                                                        |
 | `--auto-render`                             | off                                                    | Invoke Blender automatically instead of just printing the command                                       |
+
+The built `.blend` scene is always saved to `output/sessions/<session>/visualization/scene.blend` alongside the render (no flag needed).
 
 Without `--auto-render`, the script only exports the 3D layout JSON and prints the `blender -b -P ...` command for you to run yourself (Blender rendering runs in its own process; see [utils/paths.py](utils/paths.py) for dataset path configuration via `ASSET_LIBRARY_ROOT`).
 

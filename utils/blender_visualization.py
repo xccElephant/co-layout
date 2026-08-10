@@ -1343,7 +1343,7 @@ def _find_blender_binary():
     return None
 
 
-def _build_blender_command(blender_bin, layout_path, render_image, render_resolution, floor_texture, texture_scale, show_axes, axis_length, render_engine, camera_azimuth, camera_elevation, save_blend):
+def _build_blender_command(blender_bin, layout_path, render_image, render_resolution, floor_texture, texture_scale, show_axes, axis_length, render_engine, camera_azimuth, camera_elevation):
     cmd = [blender_bin, "-b", "-P", str(Path(__file__).resolve()), "--", "--layout", str(layout_path)]
     if render_image:
         cmd += ["--render-image", render_image]
@@ -1355,8 +1355,8 @@ def _build_blender_command(blender_bin, layout_path, render_image, render_resolu
         cmd += ["--show-axes", "--axis-length", str(axis_length)]
     cmd += ["--render-engine", render_engine]
     cmd += ["--camera-azimuth", str(camera_azimuth), "--camera-elevation", str(camera_elevation)]
-    if save_blend:
-        cmd += ["--save-blend", save_blend]
+    # The .blend scene is always saved by the builder step itself
+    # (derived from --layout), so there's no flag to pass through here.
     return cmd
 
 
@@ -1379,8 +1379,6 @@ def _main_driver():
     parser.add_argument("--render-engine", type=str, default="BLENDER_EEVEE_NEXT", choices=["BLENDER_EEVEE_NEXT", "EEVEE", "CYCLES"])
     parser.add_argument("--camera-azimuth", type=float, default=235.0, help="Camera azimuth around the scene, in degrees")
     parser.add_argument("--camera-elevation", type=float, default=55.0, help="Camera elevation above the horizon, in degrees (higher = more top-down, needed to see over the walls)")
-    parser.add_argument("--save-blend", type=str, default=None, help="Also save the built scene to this .blend path")
-
     parser.add_argument("--auto-render", action="store_true", help="Automatically invoke Blender as a subprocess instead of just printing the command")
     parser.add_argument("--blender-bin", type=str, default=None, help="Path to the Blender executable (default: auto-detect / $BLENDER_BIN)")
     args = parser.parse_args()
@@ -1396,6 +1394,8 @@ def _main_driver():
     )
 
     render_image = args.render_image or str(layout_path.with_name("render.png"))
+    # The .blend scene is always saved alongside the render; there's no flag to skip it.
+    save_blend = str(layout_path.with_name("scene.blend"))
 
     blender_bin = args.blender_bin or _find_blender_binary()
     if not blender_bin:
@@ -1414,7 +1414,6 @@ def _main_driver():
         render_engine=args.render_engine,
         camera_azimuth=args.camera_azimuth,
         camera_elevation=args.camera_elevation,
-        save_blend=args.save_blend,
     )
 
     if args.auto_render:
@@ -1423,6 +1422,7 @@ def _main_driver():
         if result.returncode != 0:
             sys.exit(result.returncode)
         print(f"[blender_visualization] Done. Render: {render_image}")
+        print(f"[blender_visualization] Done. Blend file: {save_blend}")
     else:
         print("\n[blender_visualization] Layout exported. Rendering must run inside Blender's own process; run:\n")
         print(shlex.join(cmd))
@@ -1447,8 +1447,10 @@ def _main_builder():
     parser.add_argument("--render-engine", type=str, default="BLENDER_EEVEE_NEXT", choices=["BLENDER_EEVEE_NEXT", "EEVEE", "CYCLES"], help="Render engine")
     parser.add_argument("--camera-azimuth", type=float, default=235.0, help="Camera azimuth around the scene, in degrees")
     parser.add_argument("--camera-elevation", type=float, default=55.0, help="Camera elevation above the horizon, in degrees (higher = more top-down, needed to see over the walls)")
-    parser.add_argument("--save-blend", type=str, default=None, help="Save the built scene to this .blend path")
     args = parser.parse_args(argv)
+
+    # The .blend scene is always saved alongside the layout JSON; there's no flag to skip it.
+    save_blend_path = str(Path(args.layout).with_name("scene.blend"))
 
     build_and_render(
         layout_path=args.layout,
@@ -1462,7 +1464,7 @@ def _main_builder():
         render_engine=args.render_engine,
         camera_azimuth=args.camera_azimuth,
         camera_elevation=args.camera_elevation,
-        save_blend_path=args.save_blend,
+        save_blend_path=save_blend_path,
     )
 
 
