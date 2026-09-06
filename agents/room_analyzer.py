@@ -24,6 +24,7 @@ The up direction of the floorplan is defined as north, and the coordinate system
 - Ensure the reasonableness of room areas and numbers (generally, no more than 7 rooms, with a total area of about **90%** of the total building area).
 - The requirements for each room (privacy, lighting, etc.) should be reasonably set according to their function and location, with a range of 1-3, where 1 is the lowest and 3 is the highest.
 - Do not provide rooms with outdoor attributes, such as 'Roof Terrace','Balcony' etc. Do not provide rooms like 'Entrance Hall', 'Entrance Room'.
+- Use native JSON types exactly: room areas and 1-3 ratings must be JSON numbers without quotes or units, and `open_room` must be a JSON boolean (`true` or `false`), not a string.
 
 ## Output Content Description
 The output must be in strict JSON format, without any additional explanatory text or markup. The JSON object should contain the following:
@@ -31,15 +32,15 @@ The output must be in strict JSON format, without any additional explanatory tex
     "RoomName1": {{
         "area": {{
             "reason": "Analyze the required area for the room based on user needs, number of residents, and building standards. Analyze the room's function (such as bedroom, living room, kitchen, etc.), determine what furniture needs to be placed in the room, and pay attention to the area requirements for this type of room as specified in the architectural design standards.",
-            "value": "Room area(Square meter)"
+            "value": Room area in square meters as a positive JSON number, for example 15.5. Do not add quotes, units, or descriptive text.
         }},
-        "open_room": true/false, Some open rooms sometimes serve as passages, such as the Living Room. For these rooms, set to true; for other rooms, set to false.
+        "open_room": true/false as a JSON boolean. Some open rooms sometimes serve as passages, such as the Living Room. For these rooms, set to true; for other rooms, set to false.
         "reason": "Analyze the thought process of the following attributes.",
         "activities": ["List of activities that may take place in this room"],
-        "privacy": "Privacy (1-3)",
-        "natural_light": "Natural light requirement (1-3)",
-        "ventilation": "Ventilation requirement (1-3)",
-        "noise_control": "Noise control requirement (1-3)",
+        "privacy": Privacy as a JSON integer from 1 to 3,
+        "natural_light": Natural light requirement as a JSON integer from 1 to 3,
+        "ventilation": Ventilation requirement as a JSON integer from 1 to 3,
+        "noise_control": Noise control requirement as a JSON integer from 1 to 3,
         "orientation_suggestion": "Orientation suggestion (combined with environment)"
     }},
     "RoomName2": {{ ... }},

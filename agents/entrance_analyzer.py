@@ -37,7 +37,7 @@ The output must be in strict JSON format, without any additional explanatory tex
 
 {{
     "reason": "Provide a detailed explanation of the reasons for choosing this entrance location, clearly articulating your comprehensive considerations of accessibility, environmental factors, user preferences, circulation organization, and spatial experience. Clearly indicate how this choice addresses the key analytical elements.",
-    "value": [i, j], Indicates the approximate location of the entrance. Note to refer to the total building area size `width * length` and the unusable external area `outdoor_space_analysis`, ensuring the entrance location is at the boundary and reasonable. Try not to place the entrance in the corner.
+    "value": [i, j], where `i` and `j` are native JSON numbers without quotes or units. This indicates the approximate entrance location. Refer to the total building area size `width * length` and the unusable external area `outdoor_space_analysis`, ensuring the entrance location is at the boundary and reasonable. Try not to place the entrance in the corner.
 }}
 
 ## Current Actual Input

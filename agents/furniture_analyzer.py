@@ -24,6 +24,7 @@ The up direction of the floorplan is defined as north, and the coordinate system
 - The number of furniture pieces in a room should neither be too many nor too few, determined by the room's area. For example, a 6-square-meter room can accommodate 2-3 pieces of furniture;A 12-square-meter room can accommodate 5-6 pieces of furniture. A room with an area of 24 square meters can accommodate 8-10 pieces of furniture. The total area of the furniture should not exceed **80%** of the room's area.
 - The furniture style should coordinate with the user's preferences and the overall design style, considering the functionality, comfort, and aesthetics of the furniture.
 - Use English for furniture names, and the size unit for furniture should be in meters.
+- Output every furniture dimension as a native positive JSON number in meters, without quotes or unit suffixes. For example, use `2.4`, not `"2.4 m"`.
 - Note that if there are multiple identical pieces of furniture, they need to be **listed separately** and numbered to distinguish their names, for example: "chair1", "chair2", "chair3"; "nightstand1", "nightstand2", etc.
 
 ## Output Content Description
@@ -36,9 +37,9 @@ The output must be in strict JSON format, without any additional explanatory tex
         {{
             "name": Furniture names, such as "Bed," "Wardrobe," "Sofa," "Dining Table," etc., only need to consider rectangular furniture placed on the **floor**. Some hanging, integrated furniture, rugs and small items on tables do not need to be considered.
             "reason": Analyze the process of the furniture's sizes and orientation.,
-            "length": The length of the furniture (meters),
-            "width": The width of the furniture (meters),
-            "height": The height of the furniture (meters).
+            "length": The positive length in meters as a JSON number,
+            "width": The positive width in meters as a JSON number,
+            "height": The non-negative height in meters as a JSON number.
         }},
         {{...}},
         ],

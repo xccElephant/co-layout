@@ -27,6 +27,7 @@ You are downstream in this workflow. Your task is to establish constraint relati
 - Boundary constraints indicate whether the furniture is against the wall. For example, in general, nightstands and beds should be placed on boundary.
 - Align constraint indicates that two pieces of furniture should be oriented in the same direction. (For example, Bed and Nightstand)
 - Facing constraint indicates that one piece of furniture should face another piece of furniture, for example ["chair", "table"] means the chair should face to the table.
+- Every distance offset must be a native JSON number in meters, without quotes or unit suffixes. Negative values and zero are allowed.
 
 ## Output Content Description
 The output must be in strict JSON format, without any additional explanatory text or markup. The JSON object should contain the following:
@@ -35,7 +36,7 @@ The output must be in strict JSON format, without any additional explanatory tex
     "RoomName1": {{
         "overall_description": Provide a detailed overall description of the furniture layout in this room. You can imagine the approximate positions and orientations of each piece of furniture in the room, as well as the relationships between the furniture. Consider the functional flow of the room and the direction of the pathways. This description should serve as the foundation and guide for subsequent analysis, and future analyses must be consistent with this description. When setting furniture constraints, ensure that these constraints are **sufficiently comprehensive** to achieve the envisioned furniture layout of the room, but be careful **not to add redundant or contradictory constraints**.,
         "boundary": ["Name1", "Name2", ...],
-        "distance": [["Name1", "Name2", 1, 0.5], [...], ...],
+        "distance": [["Name1", "Name2", 1, 0.5], [...], ...], where the third and fourth values are JSON numbers,
         "align": [["Name1", "Name2"], [...], ...],
         "facing":[["Name1", "Name2"], [...], ...]
     }},

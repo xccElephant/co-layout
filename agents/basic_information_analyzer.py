@@ -18,6 +18,7 @@ As the first step in the design process, you are tasked with carefully interpret
 - Reasonable Inference: When there is insufficient information, inferences must be made based on building design principles, codes, and common sense, and the logic and rationale for the inferences must be clearly stated in the `reason` field. Avoid ambiguous answers.
 - Bounding box definition: `building_envelope` has `width` and `length` which define the maximum perimeter rectangular boundary of the house**, `length * width` is equal to the footprint.
 - Data type: Make sure that the data type of the output value meets the requirements (Integer, Float, List, Dict, String). In particular, dimensions, area, etc. are usually required to be integers.
+- Numeric measurements must use native JSON numbers without quotes, units, ranges, or descriptive text. For example, output `10`, not `"10 m"`.
 - JSON format: The output must be in pure JSON format, without any comments, explanatory text, or other non-JSON content.
 - Sufficiently justified: The `reason` field is critical, it explains your process of judgment and inference, and is key to the transparency and traceability of the design process.
 
@@ -27,10 +28,10 @@ The output must be in strict JSON format, without any additional explanatory tex
 - "building_parameters": Basic quantitative parameters.
     - "building_envelope":
         - "reason": "Analyze whether the user mentions a specific plot size or building footprint, if so, then the footprint indicates the area of land covered by the building, including indoor and outdoor facilities. If not, estimate a **maximum perimeter bounding box** size that can accommodate the entire project based on the desired building form. length is the east-west length, width is the north-south length in meters, and is required to be an integer."
-        - "value": A **Dict** for defining the overall bounding box size: `{{"width": Integer, "length": Integer}}`
+        - "value": A **Dict** for defining the overall bounding box size: `{{"width": positive JSON integer, "length": positive JSON integer}}`. Values are in meters; do not include units in the values.
     - "target_floor_height":
         - "reason": "Analyze whether the user has special requirements for floor height (such as high living rooms). If not, then based on building specifications and common practices, set standard floor heights (e.g., residential 2.8-3.0 meters). If the floor functions differ greatly (e.g., containing commercial, public spaces), it may be necessary to set different floor heights. Specify the basis for setting the heights."
-        - "value":The height of the floors (meters, **Float**).
+        - "value": The height of the floors in meters as a positive JSON number. Do not include quotes or units.
 - "user_preferences":
     - "reason": "Summarize the key preferences and lifestyles of the users as reflected in the description of their needs. For example, requirements for light, ventilation, views, and quietness; preferences for specific styles (modern, Chinese); important family activities (cooking, gathering, working from home, working out); and considerations for privacy, openness, environmental protection, and technology integration. Describe how these preferences can be distilled from the original inputs."
     - "value": A text summary of the user's key preferences and lifestyles. (**String**)
