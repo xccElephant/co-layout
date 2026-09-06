@@ -41,6 +41,45 @@ def _upsample_room_reference(
     return upsampled[:, :target_width, :target_length]
 
 
+def _solve_coarse_layout(
+    session_id,
+    building_params,
+    rooms,
+    room_constraints,
+):
+    attempts = (
+        (False, "all room adjacency constraints"),
+        (True, "deferred closed-room adjacency"),
+    )
+    for attempt_index, (defer_closed, description) in enumerate(attempts):
+        coarse_model = FloorplanModel(
+            "Coarse",
+            session_id,
+            building_params,
+            rooms,
+            room_constraints,
+            defer_closed_room_adjacency=defer_closed,
+        )
+        try:
+            coarse_model.model.Params.TimeLimit = 30
+            coarse_model.optimize()
+            if coarse_model.model.SolCount > 0:
+                return coarse_model.get_solutions()
+        finally:
+            coarse_model.model.dispose()
+
+        if attempt_index == 0:
+            print(
+                "Strict Coarse solve found no connected layout; "
+                "retrying with deferred closed-room adjacency."
+            )
+
+    raise RuntimeError(
+        "Coarse room optimization found no connected layout "
+        f"after trying {description}"
+    )
+
+
 def _build_outdoor_coordinates(params):
     outdoor_coordinates = []
     scale = params["scale"]
@@ -128,15 +167,12 @@ def synthesis(session_id):
     for _, room in rooms_coarse.items():
         room["area"] = round(room["area"] / C / C)
 
-    coarse_model = FloorplanModel(
-        "Coarse", session_id, building_params_coarse, rooms_coarse, room_constraints
+    coarse_x_array = _solve_coarse_layout(
+        session_id,
+        building_params_coarse,
+        rooms_coarse,
+        room_constraints,
     )
-    try:
-        coarse_model.model.Params.TimeLimit = 30
-        coarse_model.optimize()
-        coarse_x_array = coarse_model.get_solutions()
-    finally:
-        coarse_model.model.dispose()
 
     # Fine Model
     building_params_fine = copy.deepcopy(building_params)
