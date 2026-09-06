@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import tempfile
 import numpy as np
 from gurobipy import *
 
@@ -8,12 +9,15 @@ from gurobipy import *
 from constants import *
 from optimization.grid_model import FurnitureGrid, PassageGrid, RoomGrid
 from optimization.model_utils import (
+    ConnectivityOptimizationError,
+    add_fixed_root_connectivity,
     add_room_rectangularity_constraints,
     add_room_adjacency_constraints,
     add_room_bounding_box_constraints,
     add_room_corner_constraints,
     build_layout_context,
     configure_model_log,
+    run_connectivity_cut_loop,
     run_staged_optimization,
 )
 from utils.connectivity import (
@@ -71,6 +75,9 @@ class CooptModel:
 
         # Constraints
         self.set_constraints()
+        self._furniture_relation_objective = (
+            self.objective_function.copy()
+        )
         # Objective Function
         self.set_objective_function()
 
@@ -709,6 +716,11 @@ class CooptModel:
             )
             self.objective_function += self.weights["privacy"] * privacy_slack[i]
 
+        self.room_objective_function = (
+            self.objective_function
+            - self._furniture_relation_objective
+        )
+
         # Furniture Balance Term
         center_error = self.model.addVars(
             self.room_num, 2, lb=0, vtype=GRB.CONTINUOUS, name="center_error"
@@ -754,7 +766,359 @@ class CooptModel:
                 center_error[k, 0] + center_error[k, 1]
             )
 
+    def _prepare_connected_start(
+        self,
+        reference_array,
+        time_limit: float,
+    ) -> float:
+        """Build a valid incumbent without constraining the final solve."""
+        started = time.monotonic()
+        original_time_limit = self.model.Params.TimeLimit
+        original_mip_focus = self.model.Params.MIPFocus
+        original_model_sense = self.model.ModelSense
+        original_objective = self.model.getObjective()
+        original_variables = tuple(self.model.getVars())
+        temporary_artifacts = []
+        fixed_room_constraints = []
+        mip_start_path = None
+
+        def clear_mip_starts():
+            self.model.NumStart = 0
+            self.model.update()
+            for variable in original_variables:
+                variable.Start = GRB.UNDEFINED
+            self.model.update()
+
+        def remove_room_connectivity():
+            constraints = [
+                constraint
+                for artifacts in temporary_artifacts
+                for constraint in artifacts.constraints
+            ]
+            variables = [
+                variable
+                for artifacts in temporary_artifacts
+                for variable in artifacts.variables
+            ]
+            if constraints:
+                self.model.remove(constraints)
+            if variables:
+                self.model.remove(variables)
+            self.model.update()
+            temporary_artifacts.clear()
+
+        def add_room_connectivity(room_roots, name_prefix):
+            for room_index, room_root in enumerate(room_roots):
+                temporary_artifacts.append(
+                    add_fixed_root_connectivity(
+                        self.model,
+                        {
+                            coordinate: self.x[
+                                room_index,
+                                *coordinate,
+                            ]
+                            for coordinate in self.valid_coordinates
+                        },
+                        self.valid_coordinates,
+                        root_coordinate=room_root,
+                        name=f"{name_prefix}_{room_index}",
+                    )
+                )
+            self.model.update()
+
+        try:
+            reference = np.asarray(reference_array)
+            if reference.ndim != 3 or reference.shape[0] != self.room_num:
+                raise ValueError(
+                    "Connected-start reference must have shape "
+                    "(room_count, width, length)"
+                )
+            for i, j in self.valid_coordinates:
+                if i >= reference.shape[1] or j >= reference.shape[2]:
+                    raise ValueError(
+                        "Connected-start reference does not cover "
+                        f"valid coordinate {(i, j)}"
+                    )
+
+            clear_mip_starts()
+            valid_coordinates = set(self.valid_coordinates)
+            reference_roots = []
+            for room_index in range(self.room_num):
+                active_coordinates = {
+                    coordinate
+                    for coordinate in self.valid_coordinates
+                    if reference[room_index, *coordinate] > 0.5
+                }
+                components = connected_components(
+                    active_coordinates,
+                    valid_coordinates,
+                )
+                if len(components) != 1:
+                    raise ValueError(
+                        "Connected-start reference room "
+                        f"{room_index} has {len(components)} components"
+                    )
+                reference_roots.append(min(components[0]))
+            add_room_connectivity(
+                reference_roots,
+                "room_seed_connectivity",
+            )
+
+            retained_reference_cells = []
+            for room_index in range(self.room_num):
+                for i, j in self.valid_coordinates:
+                    start_value = (
+                        1.0
+                        if reference[room_index, i, j] > 0.5
+                        else 0.0
+                    )
+                    self.x[room_index, i, j].Start = start_value
+                    if start_value > 0.5:
+                        retained_reference_cells.append(
+                            self.x[room_index, i, j]
+                        )
+            if hasattr(self, "passage"):
+                for i, j in self.valid_coordinates:
+                    occupied = any(
+                        reference[room_index, i, j] > 0.5
+                        for room_index in range(self.room_num)
+                    )
+                    self.passage[i, j].Start = 0.0 if occupied else 1.0
+            self.model.update()
+            print(
+                "Connected-start reference roots: "
+                f"{reference_roots}"
+            )
+
+            self.model.setParam("MIPFocus", 1)
+            reference_retention_objective = quicksum(
+                1 - variable
+                for variable in retained_reference_cells
+            )
+            self.model.setObjective(
+                reference_retention_objective,
+                GRB.MINIMIZE,
+            )
+            remaining = time_limit - (time.monotonic() - started)
+            seed_time_limit = min(15.0, remaining)
+            if seed_time_limit <= 0:
+                print("Connected-start room solve has no time remaining.")
+                return time.monotonic() - started
+
+            self.model.Params.TimeLimit = seed_time_limit
+            self.model.optimize()
+            used_fallback = self.model.SolCount == 0
+            if self.model.SolCount == 0:
+                print(
+                    "Connected-start reference could not be completed; "
+                    "falling back to a full-model feasible seed."
+                )
+                remove_room_connectivity()
+                self.model.reset()
+                clear_mip_starts()
+                self.model.setObjective(0)
+                remaining = time_limit - (time.monotonic() - started)
+                base_time_limit = min(60.0, max(0.0, remaining - 30.0))
+                if base_time_limit <= 0:
+                    print(
+                        "Connected-start base solve has no time remaining."
+                    )
+                    return time.monotonic() - started
+                self.model.Params.TimeLimit = base_time_limit
+                self.model.optimize()
+                if self.model.SolCount == 0:
+                    print("Connected-start base solve found no incumbent.")
+                    return time.monotonic() - started
+
+                base_start = tuple(
+                    (variable, variable.X)
+                    for variable in original_variables
+                )
+                room_roots = []
+                for room_index in range(self.room_num):
+                    active_coordinates = {
+                        coordinate
+                        for coordinate in self.valid_coordinates
+                        if self.x[room_index, *coordinate].X > 0.5
+                    }
+                    components = connected_components(
+                        active_coordinates,
+                        valid_coordinates,
+                    )
+                    room_roots.append(min(components[0]))
+                add_room_connectivity(
+                    room_roots,
+                    "room_repair_connectivity",
+                )
+                for variable, value in base_start:
+                    variable.Start = value
+                self.model.update()
+                print(
+                    "Connected-start repair roots: "
+                    f"{room_roots}"
+                )
+
+                remaining = time_limit - (time.monotonic() - started)
+                cut_reserve = max(5.0, remaining * 0.25)
+                room_time_limit = remaining - cut_reserve
+                if room_time_limit <= 0:
+                    print(
+                        "Connected-start repair has no time remaining."
+                    )
+                    return time.monotonic() - started
+                self.model.Params.TimeLimit = room_time_limit
+                self.model.optimize()
+                if self.model.SolCount == 0:
+                    print(
+                        "Connected-start room repair found no incumbent."
+                    )
+                    return time.monotonic() - started
+            else:
+                room_roots = reference_roots
+                print("Connected-start reference completed successfully.")
+
+            if used_fallback:
+                remaining = time_limit - (time.monotonic() - started)
+                refinement_reserve = max(30.0, remaining * 0.5)
+                refinement_time_limit = min(
+                    60.0,
+                    max(0.0, remaining - refinement_reserve),
+                )
+                if refinement_time_limit > 0:
+                    self.model.Params.TimeLimit = refinement_time_limit
+                    self.model.setParam("MIPFocus", 2)
+                    self.model.setObjective(
+                        self.room_objective_function
+                        + self.weights["reference"]
+                        * reference_retention_objective,
+                        GRB.MINIMIZE,
+                    )
+                    self.model.optimize()
+                    if self.model.SolCount == 0:
+                        print(
+                            "Connected-start reference refinement "
+                            "found no incumbent."
+                        )
+                        return time.monotonic() - started
+                    print(
+                        "Connected-start room refinement: "
+                        f"seconds={refinement_time_limit:.1f} "
+                        f"objective={self.model.ObjVal:.6f}"
+                    )
+
+            room_layout = {
+                (room_index, i, j): round(
+                    self.x[room_index, i, j].X
+                )
+                for room_index in range(self.room_num)
+                for i, j in self.valid_coordinates
+            }
+
+            for room_index in range(self.room_num):
+                for i, j in self.valid_coordinates:
+                    fixed_room_constraints.append(
+                        self.model.addConstr(
+                            self.x[room_index, i, j]
+                            == room_layout[room_index, i, j],
+                            name=f"connected_start_fix_room_{room_index}_{i}_{j}",
+                        )
+                    )
+
+            self.model.update()
+            self.model.setParam("MIPFocus", 1)
+            self.model.setObjective(0)
+            remaining = time_limit - (time.monotonic() - started)
+            if remaining <= 0:
+                print("Connected-start furniture solve has no time remaining.")
+                return time.monotonic() - started
+
+            cut_loop_reserve = max(5.0, remaining * 0.25)
+            furniture_time_limit = remaining - cut_loop_reserve
+            if furniture_time_limit <= 0:
+                print(
+                    "Connected-start furniture solve cannot preserve "
+                    "cut-loop time."
+                )
+                return time.monotonic() - started
+            self.model.Params.TimeLimit = furniture_time_limit
+            self.model.optimize()
+            if self.model.SolCount == 0:
+                print("Connected-start fixed-room solve found no incumbent.")
+                return time.monotonic() - started
+
+            remaining = time_limit - (time.monotonic() - started)
+            if remaining <= 0:
+                print("Connected-start cut loop has no time remaining.")
+                return time.monotonic() - started
+            cut_stats = run_connectivity_cut_loop(
+                self.model,
+                self._add_connectivity_cuts,
+                time_limit=remaining,
+            )
+            self.get_solution()
+            self._validate_final_arrays()
+            descriptor, temporary_mip_start_path = tempfile.mkstemp(
+                prefix="co_layout_connected_",
+                suffix=".mst",
+            )
+            os.close(descriptor)
+            os.unlink(temporary_mip_start_path)
+            try:
+                self.model.write(temporary_mip_start_path)
+            except Exception:
+                if os.path.exists(temporary_mip_start_path):
+                    os.remove(temporary_mip_start_path)
+                raise
+            mip_start_path = temporary_mip_start_path
+            print(
+                "Connected start prepared: "
+                f"room_roots={room_roots} "
+                f"cut_rounds={cut_stats.rounds} "
+                f"cuts={cut_stats.cuts_added}"
+            )
+        except ConnectivityOptimizationError as error:
+            print(f"Connected-start preparation failed: {error}")
+        finally:
+            try:
+                temporary_constraints = [
+                    constraint
+                    for artifacts in temporary_artifacts
+                    for constraint in artifacts.constraints
+                ]
+                temporary_variables = [
+                    variable
+                    for artifacts in temporary_artifacts
+                    for variable in artifacts.variables
+                ]
+                if fixed_room_constraints or temporary_constraints:
+                    self.model.remove(
+                        fixed_room_constraints + temporary_constraints
+                    )
+                if temporary_variables:
+                    self.model.remove(temporary_variables)
+                self.model.update()
+                if mip_start_path is not None:
+                    self.model.reset()
+                    self.model.NumStart = 0
+                    self.model.update()
+                    try:
+                        self.model.read(mip_start_path)
+                    finally:
+                        os.remove(mip_start_path)
+            finally:
+                self.model.setObjective(
+                    original_objective,
+                    original_model_sense,
+                )
+                self.model.Params.MIPFocus = original_mip_focus
+                self.model.Params.TimeLimit = original_time_limit
+                self.model.update()
+
+        return time.monotonic() - started
+
     def optimize(self, reference_array = None, stage_num: int = 2):
+        solve_started = time.monotonic()
+        original_time_limit = self.model.Params.TimeLimit
         if reference_array is not None:
             #Apply Coarse-to-Fine Strategy
             mip_start_count = 0
@@ -783,18 +1147,37 @@ class CooptModel:
                 f"Added objective penalty terms for {penalty_count} grid cells based on coarse solution.\n"
             )
 
+        if reference_array is not None and stage_num == 1:
+            preparation_budget = min(
+                original_time_limit * 0.6,
+                max(0.0, original_time_limit - 1),
+            )
+            if preparation_budget > 0:
+                self._prepare_connected_start(
+                    reference_array,
+                    preparation_budget,
+                )
+
+        elapsed = time.monotonic() - solve_started
+        self.model.Params.TimeLimit = max(
+            1.0,
+            original_time_limit - elapsed,
+        )
         self.model.Params.LazyConstraints = 1
         connectivity_callback = self._build_connectivity_callback(
             self._build_visualization_callback()
         )
-        run_staged_optimization(
-            self.model,
-            self.model_name,
-            self.objective_function,
-            stage_num,
-            self.output_dir,
-            callback=connectivity_callback,
-        )
+        try:
+            run_staged_optimization(
+                self.model,
+                self.model_name,
+                self.objective_function,
+                stage_num,
+                self.output_dir,
+                callback=connectivity_callback,
+            )
+        finally:
+            self.model.Params.TimeLimit = original_time_limit
         connectivity_stats = self.model._connectivity_lazy_stats
         logger.info(
             "Fine lazy connectivity: callbacks=%d rejected=%d "

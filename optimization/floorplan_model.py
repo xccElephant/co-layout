@@ -29,6 +29,8 @@ class FloorplanModel:
         building_params: dict,
         rooms: dict,
         room_constraints: dict,
+        *,
+        defer_closed_room_adjacency: bool = True,
     ):
         self.model_name = model_name
         self.session_id = session_id
@@ -40,6 +42,9 @@ class FloorplanModel:
         self.outdoor_space_coordinates = building_params["outdoor_space"]
         self.rooms = rooms
         self.room_constraints = room_constraints
+        self.defer_closed_room_adjacency = (
+            defer_closed_room_adjacency
+        )
         self.weights = COARSE_MODEL_WEIGHTS
 
         # Gurobi Model Definition
@@ -341,7 +346,41 @@ class FloorplanModel:
             )
             self.objective_function += self.weights["privacy"] * privacy_slack[i]
 
-    def optimize(self, stage_num: int = 2):
+    def _set_reference_start(self, reference_array) -> int:
+        reference = np.asarray(reference_array)
+        expected_shape = (self.room_num, self.width, self.length)
+        if reference.shape != expected_shape:
+            raise ValueError(
+                "reference_array must have shape "
+                f"{expected_shape}, got {reference.shape}"
+            )
+
+        selected_count = 0
+        for i, j in self.valid_coordinates:
+            selected_rooms = 0
+            for room_index in range(self.room_num):
+                start_value = (
+                    1.0 if reference[room_index, i, j] > 0.5 else 0.0
+                )
+                self.x[room_index, i, j].Start = start_value
+                selected_rooms += int(start_value)
+            if selected_rooms > 1:
+                raise ValueError(
+                    "reference_array assigns multiple rooms to "
+                    f"cell {(i, j)}"
+                )
+            self.passage[i, j].Start = 1.0 - selected_rooms
+            selected_count += selected_rooms
+        self.model.update()
+        return selected_count
+
+    def optimize(self, stage_num: int = 2, reference_array=None):
+        if reference_array is not None:
+            selected_count = self._set_reference_start(reference_array)
+            print(
+                "Set room-only MIP start for "
+                f"{selected_count} occupied cells."
+            )
         self.model.Params.LazyConstraints = 1
         connectivity_callback = self._build_connectivity_callback(
             self._build_visualization_callback()
@@ -356,7 +395,7 @@ class FloorplanModel:
         )
         connectivity_stats = self.model._connectivity_lazy_stats
         print(
-            "Coarse lazy connectivity: "
+            f"{self.model_name} lazy connectivity: "
             f"callbacks={connectivity_stats['mipsol_calls']} "
             f"rejected={connectivity_stats['rejected_candidates']} "
             f"cuts={connectivity_stats['cuts_added']}"
@@ -659,6 +698,16 @@ class FloorplanModel:
                 )
 
     def add_room_adjacent_constraints(self):
+        if not getattr(self, "defer_closed_room_adjacency", True):
+            add_room_adjacency_constraints(
+                self.model,
+                self.x,
+                self.room_constraints,
+                self.room_name_list,
+                self.valid_coordinates,
+            )
+            return
+
         open_room_names = {
             self.room_name_list[room_index]
             for room_index in self.open_room_indices

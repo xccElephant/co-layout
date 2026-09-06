@@ -129,7 +129,7 @@ Example:
 python run_optimization.py --session 2026-02-06_18-03-50_yHPGOu
 ```
 
-While it runs, Gurobi prints a MIP progress log (`Incumbent` / `BestBd` / `Gap` columns). `Incumbent` is the best feasible objective found so far, `BestBd` is the theoretical lower bound, and `Gap = (Incumbent - BestBd) / Incumbent` is how far the current solution is from provably optimal — solving stops once `Gap` drops below `MIPGap` (1%, set in [`optimization/coopt_model.py`](optimization/coopt_model.py)/[`floorplan_model.py`](optimization/floorplan_model.py)) or `TimeLimit` (600s/300s) is hit, whichever comes first. `Gap` is the single most useful number to watch: if it's still large when `TimeLimit` cuts the run off, the returned layout is a usable-but-unconverged solution rather than a near-optimal one.
+While it runs, Gurobi prints a MIP progress log (`Incumbent` / `BestBd` / `Gap` columns). `Incumbent` is the best feasible objective found so far, `BestBd` is the theoretical lower bound, and `Gap = (Incumbent - BestBd) / Incumbent` is how far the current solution is from provably optimal — solving stops once `Gap` drops below `MIPGap` (1%, set in [`optimization/coopt_model.py`](optimization/coopt_model.py)/[`floorplan_model.py`](optimization/floorplan_model.py)) or the per-solve `TimeLimit` is hit. The current pipeline uses 30s for Coarse topology, 90s for FineRoom refinement, and a 600s total budget for connected-start preparation plus final Fine co-optimization. `Gap` is the single most useful number to watch: if it's still large when `TimeLimit` cuts the run off, the returned layout is a usable-but-unconverged solution rather than a near-optimal one.
 
 ### 3. Run End-to-End Pipeline
 

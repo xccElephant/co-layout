@@ -127,6 +127,122 @@ def add_room_rectangularity_constraints(
 
 
 @dataclass(frozen=True)
+class ConnectivityFlowArtifacts:
+    variables: tuple
+    constraints: tuple
+
+
+def add_fixed_root_connectivity(
+    model,
+    active_by_coordinate,
+    valid_coordinates,
+    *,
+    root_coordinate,
+    name: str,
+):
+    """Connect active four-neighbor cells to one required active root."""
+    coordinates = tuple(sorted(valid_coordinates))
+    if not coordinates:
+        raise ValueError("Connectivity requires at least one valid coordinate")
+    if root_coordinate not in coordinates:
+        raise ValueError("Connectivity root must be a valid coordinate")
+
+    coordinate_set = set(coordinates)
+    directed_edges = tuple(
+        (i, j, neighbor_i, neighbor_j)
+        for i, j in coordinates
+        for neighbor_i, neighbor_j in (
+            (i - 1, j),
+            (i + 1, j),
+            (i, j - 1),
+            (i, j + 1),
+        )
+        if (neighbor_i, neighbor_j) in coordinate_set
+    )
+    capacity = len(coordinates)
+    flow = model.addVars(
+        directed_edges,
+        lb=0,
+        ub=capacity,
+        vtype=GRB.CONTINUOUS,
+        name=f"{name}_flow",
+    )
+
+    constraints = [
+        model.addConstr(
+            active_by_coordinate[root_coordinate] == 1,
+            name=f"{name}_root_active",
+        )
+    ]
+    total_active = quicksum(
+        active_by_coordinate[coordinate]
+        for coordinate in coordinates
+    )
+
+    for i, j in coordinates:
+        active = active_by_coordinate[i, j]
+        incoming = quicksum(
+            flow[neighbor_i, neighbor_j, i, j]
+            for neighbor_i, neighbor_j in (
+                (i - 1, j),
+                (i + 1, j),
+                (i, j - 1),
+                (i, j + 1),
+            )
+            if (neighbor_i, neighbor_j) in coordinate_set
+        )
+        outgoing = quicksum(
+            flow[i, j, neighbor_i, neighbor_j]
+            for neighbor_i, neighbor_j in (
+                (i - 1, j),
+                (i + 1, j),
+                (i, j - 1),
+                (i, j + 1),
+            )
+            if (neighbor_i, neighbor_j) in coordinate_set
+        )
+        balance = (
+            outgoing - incoming == total_active - 1
+            if (i, j) == root_coordinate
+            else incoming - outgoing == active
+        )
+        constraints.append(
+            model.addConstr(
+                balance,
+                name=f"{name}_balance_{i}_{j}",
+            )
+        )
+
+    for i, j, neighbor_i, neighbor_j in directed_edges:
+        constraints.append(
+            model.addConstr(
+                flow[i, j, neighbor_i, neighbor_j]
+                <= capacity * active_by_coordinate[i, j],
+                name=(
+                    f"{name}_flow_from_active_"
+                    f"{i}_{j}_{neighbor_i}_{neighbor_j}"
+                ),
+            )
+        )
+        constraints.append(
+            model.addConstr(
+                flow[i, j, neighbor_i, neighbor_j]
+                <= capacity
+                * active_by_coordinate[neighbor_i, neighbor_j],
+                name=(
+                    f"{name}_flow_to_active_"
+                    f"{i}_{j}_{neighbor_i}_{neighbor_j}"
+                ),
+            )
+        )
+
+    return ConnectivityFlowArtifacts(
+        variables=tuple(flow.values()),
+        constraints=tuple(constraints),
+    )
+
+
+@dataclass(frozen=True)
 class ConnectivityCutStats:
     rounds: int
     cuts_added: int

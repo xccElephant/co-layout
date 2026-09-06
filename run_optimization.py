@@ -18,6 +18,29 @@ from utils.find_boundary import (calculate_boundary_direction,
 from utils.pre_process import extract_data
 
 
+def _upsample_room_reference(
+    coarse_array,
+    *,
+    scale_factor,
+    target_width,
+    target_length,
+):
+    upsampled = np.kron(
+        np.asarray(coarse_array),
+        np.ones((scale_factor, scale_factor), dtype=int),
+    )
+    if (
+        upsampled.shape[1] < target_width
+        or upsampled.shape[2] < target_length
+    ):
+        raise ValueError(
+            "Upsampled coarse room reference does not cover target grid: "
+            f"upsampled={upsampled.shape[1:]} "
+            f"target={(target_width, target_length)}"
+        )
+    return upsampled[:, :target_width, :target_length]
+
+
 def _build_outdoor_coordinates(params):
     outdoor_coordinates = []
     scale = params["scale"]
@@ -108,8 +131,12 @@ def synthesis(session_id):
     coarse_model = FloorplanModel(
         "Coarse", session_id, building_params_coarse, rooms_coarse, room_constraints
     )
-    coarse_model.optimize()
-    coarse_x_array = coarse_model.get_solutions()
+    try:
+        coarse_model.model.Params.TimeLimit = 30
+        coarse_model.optimize()
+        coarse_x_array = coarse_model.get_solutions()
+    finally:
+        coarse_model.model.dispose()
 
     # Fine Model
     building_params_fine = copy.deepcopy(building_params)
@@ -142,8 +169,37 @@ def synthesis(session_id):
             for item1, item2, dis1, dis2 in constraints["distance_constraints"]
         ]
 
-    # coarse to fine mapping
-    fine_x_array = np.kron(coarse_x_array, np.ones((N, N), dtype=int))
+    # Refine the connected coarse topology on the one-meter room grid before
+    # introducing furniture.  This keeps room geometry search in the much
+    # smaller floorplan model instead of asking the joint model to rediscover
+    # a connected topology while placing every furniture item.
+    coarse_reference_array = _upsample_room_reference(
+        coarse_x_array,
+        scale_factor=N,
+        target_width=building_params_fine["width"],
+        target_length=building_params_fine["length"],
+    )
+    fine_room_model = FloorplanModel(
+        "FineRoom",
+        session_id,
+        building_params_fine,
+        rooms_fine,
+        room_constraints,
+        defer_closed_room_adjacency=False,
+    )
+    try:
+        fine_room_model.model.Params.TimeLimit = 90
+        fine_room_model.optimize(
+            stage_num=2,
+            reference_array=coarse_reference_array,
+        )
+        if fine_room_model.model.SolCount == 0:
+            raise RuntimeError(
+                "Fine-grid room refinement found no connected layout"
+            )
+        fine_x_array = fine_room_model.get_solutions()
+    finally:
+        fine_room_model.model.dispose()
 
     fine_model = CooptModel(
         "Fine",
